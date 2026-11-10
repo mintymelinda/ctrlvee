@@ -159,6 +159,26 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         self.assertGreater(schedule["next_attempt_at"], now.timestamp())
         vlc.play_item.assert_not_called()
 
+    def test_completion_backup_failure_keeps_schedule_in_memory(self):
+        schedule = self.make_schedule()
+        vlc = Mock()
+        vlc.play_item.return_value = object()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
+        scheduler = self.make_scheduler(schedule, vlc)
+        scheduler._save_schedule_backup.side_effect = [True, False]
+
+        outcome = scheduler._execute_due_schedule(
+            schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ)
+        )
+
+        self.assertEqual(outcome, "confirming")
+        self.assertEqual(scheduler.scheduled, [schedule])
+        self.assertEqual(schedule["status"], "executing")
+
     def test_failed_playback_retains_job_and_schedules_retry(self):
         schedule = self.make_schedule()
         vlc = Mock()
@@ -200,18 +220,21 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         self.assertEqual(scheduler.scheduled, [])
         vlc.play_item.assert_not_called()
 
-    def test_restart_does_not_recover_when_a_different_item_is_current(self):
+    def test_restart_does_not_recover_when_rebound_target_has_a_different_id(self):
         schedule = self.make_schedule(
             status="executing", attempt_count=1, target_item_id="Heat (1995).mkv"
         )
         vlc = Mock()
         vlc.play_item.return_value = object()
         scheduler = self.make_scheduler(schedule, vlc)
-        unrelated_current_leaf = leaf("Alien (1979).mkv")
-        unrelated_current_leaf.set("current", "current")
+        rebound_leaf = leaf("Alien (1979).mkv")
+        rebound_leaf.set("current", "current")
+        current_playlist = ET.Element("playlist")
+        current_playlist.append(rebound_leaf)
+        vlc.get_playlist.return_value = current_playlist
 
         outcome = scheduler._execute_due_schedule(
-            schedule, unrelated_current_leaf, datetime.now(PH_TZ)
+            schedule, rebound_leaf, datetime.now(PH_TZ)
         )
 
         self.assertEqual(outcome, "started")
