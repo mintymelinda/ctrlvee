@@ -106,7 +106,6 @@ class VLCControllerTests(unittest.TestCase):
 
         self.assertEqual(path, "/media/Some Show/Episode 1.mkv")
 
-    @unittest.expectedFailure
     def test_queue_order_is_compacted_after_removal_and_insertion(self):
         self.queue_item("A")
         self.queue_item("B")
@@ -116,7 +115,6 @@ class VLCControllerTests(unittest.TestCase):
         orders = sorted(item["queue_order"] for item in self.controller._queued_items.values())
         self.assertEqual(orders, [1, 2])
 
-    @unittest.expectedFailure
     def test_transition_does_not_advance_twice_after_queued_item_starts(self):
         self.queue_item("A")
         self.queue_item("B")
@@ -129,6 +127,45 @@ class VLCControllerTests(unittest.TestCase):
 
         self.assertEqual(play.call_count, 1)
 
+
+    def test_pending_queue_item_is_retained_until_vlc_confirms_transition(self):
+        self.queue_item("A")
+        self.queue_item("B")
+
+        with patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ):
+            result = self.controller.play_next_queued_item()
+
+        self.assertTrue(result["success"])
+        self.assertIn("A", self.controller._queued_items)
+        self.assertEqual(self.controller.get_next_queued_item()["item_id"], "A")
+        play.assert_called_once_with("A")
+
+        stale_result = self.controller.check_and_handle_queue_transition("previous")
+        self.assertEqual(stale_result["transitions"], [])
+        self.assertEqual(play.call_count, 1)
+
+        confirmed_result = self.controller.check_and_handle_queue_transition("A")
+        self.assertEqual(
+            [transition["action"] for transition in confirmed_result["transitions"]],
+            ["queued_item_started"],
+        )
+        self.assertEqual(self.controller.get_next_queued_item()["item_id"], "B")
+
+    def test_pending_queue_item_blocks_duplicate_play_commands(self):
+        self.queue_item("A")
+
+        with patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ):
+            first = self.controller.play_next_queued_item()
+            second = self.controller.play_next_queued_item()
+
+        self.assertTrue(first["success"])
+        self.assertFalse(second["success"])
+        self.assertIn("already starting", second["error"])
+        play.assert_called_once_with("A")
 
 if __name__ == "__main__":
     unittest.main()
