@@ -284,7 +284,11 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
             self.assertEqual(loaded[0]["attempt_count"], 2)
             self.assertEqual(loaded[0]["status"], "pending")
             self.assertEqual(loaded[0]["dt"], schedule["dt"])
-            self.assertAlmostEqual(loaded[0]["next_attempt_at"], schedule["next_attempt_at"])
+            self.assertIsInstance(loaded[0]["next_attempt_at"], datetime)
+            self.assertAlmostEqual(
+                loaded[0]["next_attempt_at"].timestamp(),
+                schedule["next_attempt_at"],
+            )
         finally:
             os.unlink(backup_path)
 
