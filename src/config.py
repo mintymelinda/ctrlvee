@@ -205,6 +205,10 @@ class Config:
     ENABLE_VOICE_JOIN: bool = os.getenv('ENABLE_VOICE_JOIN', 'true').strip().lower() in {'1','true','yes','y'}
     # Discord voice channel ID for the bot to join
     VOICE_JOIN_CHANNEL_ID: int = int(os.getenv('VOICE_JOIN_CHANNEL_ID', '0'))
+    # Watch statistics are opt-in because they persist Discord IDs and viewing totals.
+    ENABLE_WATCH_STATS: bool = os.getenv('ENABLE_WATCH_STATS', 'false').strip().lower() in {'1', 'true', 'yes', 'y'}
+    WATCH_STATS_FILE: str = os.getenv('WATCH_STATS_FILE', 'watch_stats.json').strip()
+    STATS_EXCLUDED_USER_IDS: List[int] = [int(user_id) for user_id in os.getenv('STATS_EXCLUDED_USER_IDS', '').split(',') if user_id.strip()]
     # Require the requester to be in the configured room and prevent track hijacking.
     ENABLE_VOICE_ROOM_RULES: bool = os.getenv('ENABLE_VOICE_ROOM_RULES', 'true').strip().lower() in {'1', 'true', 'yes', 'y'}
     # Whether to join voice immediately on startup (default: true)
