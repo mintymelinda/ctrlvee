@@ -1,5 +1,6 @@
 
 
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime
@@ -69,13 +70,8 @@ class Scheduler(commands.Cog):
         self.vlc = vlc_controller
         self.tmdb = TMDBService()
         self.scheduled = self._load_schedule_backup()
-        self.pre_announce_sent = set()  # (number, dt) tuples
-        self.check_schedules.start()
-    def __init__(self, bot, vlc_controller):
-        self.bot = bot
-        self.vlc = vlc_controller
-        self.tmdb = TMDBService()
-        self.scheduled = self._load_schedule_backup()
+        self.pre_announce_sent = set()
+        self._schedule_lock = asyncio.Lock()
         self.check_schedules.start()
 
     def cog_unload(self):
@@ -83,11 +79,22 @@ class Scheduler(commands.Cog):
         self._save_schedule_backup()
 
     def _save_schedule_backup(self):
+        temporary_file = f"{SCHEDULE_BACKUP_FILE}.tmp"
         try:
-            with open(SCHEDULE_BACKUP_FILE, "w") as f:
+            with open(temporary_file, "w") as f:
                 json.dump(self.scheduled, f, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_file, SCHEDULE_BACKUP_FILE)
+            return True
         except Exception as e:
             logger.error(f"Error saving schedule backup: {e}")
+            try:
+                if os.path.exists(temporary_file):
+                    os.unlink(temporary_file)
+            except OSError:
+                pass
+            return False
 
     def _uri_exists(self, uri) -> bool:
         path = self.vlc._uri_to_path(uri)
@@ -133,6 +140,10 @@ class Scheduler(commands.Cog):
                 for s in data:
                     if isinstance(s.get("dt"), str):
                         s["dt"] = datetime.fromisoformat(s["dt"])
+                    if isinstance(s.get("next_attempt_at"), str):
+                        s["next_attempt_at"] = datetime.fromisoformat(s["next_attempt_at"])
+                    s.setdefault("status", "pending")
+                    s.setdefault("attempt_count", 0)
                 return data
             except Exception as e:
                 logger.error(f"Error loading schedule backup: {e}")
@@ -174,7 +185,9 @@ class Scheduler(commands.Cog):
                 "dt": dt,
                 "user": ctx.author.id,
                 "channel": ctx.channel.id,
-                "duration": duration
+                "duration": duration,
+                "status": "pending",
+                "attempt_count": 0
             }
             self.scheduled.append(entry)
             self._save_schedule_backup()
@@ -231,110 +244,188 @@ class Scheduler(commands.Cog):
         else:
             await ctx.send(f"Removed all schedules for movie #{number}.")
 
+    def _retry_schedule(self, schedule, now, reason):
+        """Persist a bounded exponential retry without discarding the due job."""
+        attempts = int(schedule.get("attempt_count", 0)) + 1
+        delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+        schedule["attempt_count"] = attempts
+        schedule["status"] = "pending"
+        schedule.pop("execution_started_at", None)
+        schedule["last_error"] = str(reason)
+        schedule["next_attempt_at"] = now.timestamp() + delay
+        logger.warning(
+            "Scheduled movie '%s' attempt %s failed; retrying in %ss: %s",
+            schedule.get("title", "Unknown"), attempts, delay, reason,
+        )
+        self._save_schedule_backup()
+
+    def _execute_due_schedule(self, schedule, leaf, now):
+        """Execute one due schedule with a durable claim and restart reconciliation."""
+        item_id = leaf.get("id") if leaf is not None else None
+
+        # If a previous process died after sending the command, reconcile against
+        # VLC's current item before deciding whether another command is needed.
+        if schedule.get("status") == "executing":
+            if item_id is not None and leaf.get("current") is not None:
+                self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
+                self._save_schedule_backup()
+                logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))
+                return "recovered"
+            # The target is not currently playing, so it is safe to retry the
+            # persisted in-flight attempt.
+            schedule["status"] = "pending"
+            schedule.pop("execution_started_at", None)
+
+        next_attempt = schedule.get("next_attempt_at")
+        if next_attempt is not None:
+            if isinstance(next_attempt, (int, float)):
+                retry_at = datetime.fromtimestamp(next_attempt, tz=now.tzinfo)
+            else:
+                retry_at = next_attempt
+            if retry_at > now:
+                return "deferred"
+
+        if item_id is None:
+            self._retry_schedule(schedule, now, "scheduled media could not be resolved in the VLC playlist")
+            return "retry"
+
+        # Persist the claim before calling VLC so overlapping loop invocations
+        # and a restarted process can identify an interrupted attempt.
+        schedule["status"] = "executing"
+        schedule["execution_started_at"] = now.isoformat()
+        schedule["attempt_count"] = int(schedule.get("attempt_count", 0)) + 1
+        schedule["target_item_id"] = str(item_id)
+        if not self._save_schedule_backup():
+            schedule["status"] = "pending"
+            schedule.pop("execution_started_at", None)
+            logger.error(
+                "Not starting scheduled movie '%s' because its execution claim "
+                "could not be persisted",
+                schedule.get("title", "Unknown"),
+            )
+            return "retry"
+
+        try:
+            result = self.vlc.play_item(item_id)
+            succeeded = result is not None and result is not False
+        except Exception as exc:
+            succeeded = False
+            error = exc
+        else:
+            error = "VLC rejected the playback command"
+
+        if not succeeded:
+            # The attempt count was already persisted with the execution claim.
+            attempts = int(schedule.get("attempt_count", 1))
+            delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+            schedule["status"] = "pending"
+            schedule.pop("execution_started_at", None)
+            schedule["last_error"] = str(error)
+            schedule["next_attempt_at"] = now.timestamp() + delay
+            self._save_schedule_backup()
+            logger.warning(
+                "Scheduled movie '%s' failed to start; retrying in %ss: %s",
+                schedule.get("title", "Unknown"), delay, error,
+            )
+            return "retry"
+
+        self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
+        self._save_schedule_backup()
+        return "started"
+
+    async def _announce_schedule_started(self, schedule):
+        """Send playback and metadata announcements after VLC accepts the command."""
+        from src.config import Config
+
+        announce_ids = Config.get_announce_channel_ids()
+        channel_ids = set(announce_ids or [])
+        if schedule.get("channel"):
+            channel_ids.add(schedule["channel"])
+        role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
+        mention = f'<@&{role_id}>' if role_id else ''
+        msg = f"{mention} 🎬 Scheduled movie #{schedule['number']} ({schedule.get('title', 'Unknown')}) is now playing!".strip()
+
+        for cid in channel_ids:
+            channel = self.bot.get_channel(cid)
+            if not channel:
+                try:
+                    channel = await self.bot.fetch_channel(cid)
+                except Exception:
+                    channel = None
+            if channel:
+                try:
+                    await channel.send(msg)
+                except Exception:
+                    pass
+
+        title = schedule.get("title")
+        year = None
+        match = re.search(r"\((\d{4})\)$", title or "")
+        if match:
+            year = int(match.group(1))
+            title = title[:match.start()].strip()
+        if title:
+            embed = self.tmdb.get_movie_metadata(title, year, file_path=schedule.get("uri"))
+            if embed:
+                for cid in channel_ids:
+                    channel = self.bot.get_channel(cid)
+                    if not channel:
+                        try:
+                            channel = await self.bot.fetch_channel(cid)
+                        except Exception:
+                            channel = None
+                    if channel:
+                        try:
+                            await channel.send(embed=embed)
+                        except Exception:
+                            pass
+
     @tasks.loop(seconds=30)
     async def check_schedules(self):
         from src.config import Config
-        now = datetime.now(PH_TZ)
-        try:
-            resolved = self._rebind_due_schedules(now)
-        except Exception as e:
-            logger.error(f"Error resolving scheduled items: {e}")
-            resolved = {}
-        # Pre-announce 10 minutes before
-        # Safeguard: ensure pre_announce_sent always exists
-        if not hasattr(self, 'pre_announce_sent') or self.pre_announce_sent is None:
-            self.pre_announce_sent = set()
-        for s in self.scheduled:
-            pre_announce_key = (s['number'], s['dt'])
-            if pre_announce_key not in self.pre_announce_sent:
-                delta = (s['dt'] - now).total_seconds()
-                if 0 < delta <= 600:  # 10 minutes
-                    announce_ids = Config.get_announce_channel_ids()
-                    channel_ids = set(announce_ids or [])
-                    # Also notify the original scheduling channel for visibility
-                    try:
-                        if s.get('channel'):
-                            channel_ids.add(s['channel'])
-                    except Exception:
-                        pass
-                    role_id = getattr(Config, 'WATCH_ANNOUNCE_ROLE_ID', 0)
-                    mention = f'<@&{role_id}>' if role_id else ''
-                    for cid in channel_ids:
-                        channel = self.bot.get_channel(cid)
-                        if not channel:
-                            try:
-                                channel = await self.bot.fetch_channel(cid)
-                            except Exception:
-                                continue
-                        try:
-                            msg = f"{mention} ⏰ Reminder: Scheduled movie #{s['number']} ({s.get('title', 'Unknown')}) will start in 10 minutes!"
-                            await channel.send(msg.strip())
-                        except Exception:
-                            pass
-                    self.pre_announce_sent.add(pre_announce_key)
-        # Run scheduled movies
-        to_run = [s for s in self.scheduled if s["dt"] <= now]
-        for s in to_run:
+
+        async with self._schedule_lock:
+            now = datetime.now(PH_TZ)
             try:
-                # Resolve saved file identity rather than trusting a stale playlist number.
-                idx, leaf = resolved.get(id(s), (None, None))
-                if leaf is not None:
-                    item_id = leaf.get('id')
-                    self.vlc.play_item(item_id)
-                    announce_ids = Config.get_announce_channel_ids()
-                    channel_ids = set(announce_ids or [])
-                    # Also notify the original scheduling channel for visibility
+                resolved = self._rebind_due_schedules(now)
+            except Exception as exc:
+                logger.error("Error resolving scheduled items: %s", exc)
+                resolved = {}
+
+            # Pre-announce schedules within ten minutes. This is intentionally
+            # separate from execution retry state.
+            for schedule in list(self.scheduled):
+                pre_announce_key = (schedule["number"], schedule["dt"])
+                if pre_announce_key in self.pre_announce_sent:
+                    continue
+                delta = (schedule["dt"] - now).total_seconds()
+                if not 0 < delta <= 600:
+                    continue
+                channel_ids = set(Config.get_announce_channel_ids() or [])
+                if schedule.get("channel"):
+                    channel_ids.add(schedule["channel"])
+                role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
+                mention = f'<@&{role_id}>' if role_id else ''
+                for channel_id in channel_ids:
+                    channel = self.bot.get_channel(channel_id)
+                    if not channel:
+                        try:
+                            channel = await self.bot.fetch_channel(channel_id)
+                        except Exception:
+                            continue
                     try:
-                        if s.get('channel'):
-                            channel_ids.add(s['channel'])
+                        await channel.send(
+                            f"{mention} ⏰ Reminder: Scheduled movie #{schedule['number']} "
+                            f"({schedule.get('title', 'Unknown')}) will start in 10 minutes!".strip()
+                        )
                     except Exception:
                         pass
-                    # Include configured announce role mention (if any)
-                    role_id = getattr(Config, 'WATCH_ANNOUNCE_ROLE_ID', 0)
-                    mention = f'<@&{role_id}>' if role_id else ''
-                    # Use .strip() so there is no leading space when mention is empty
-                    msg = f"{mention} 🎬 Scheduled movie #{s['number']} ({s.get('title', 'Unknown')}) is now playing!".strip()
-                    for cid in channel_ids:
-                        channel = self.bot.get_channel(cid)
-                        if not channel:
-                            try:
-                                channel = await self.bot.fetch_channel(cid)
-                            except Exception:
-                                channel = None
-                        if channel:
-                            try:
-                                await channel.send(msg)
-                            except Exception:
-                                pass
-                    # Try to fetch and send TMDB metadata embed
-                    title = s.get('title', None)
-                    year = None
-                    # Try to extract year from title if present (e.g. "Movie Title (2020)")
-                    import re
-                    m = re.search(r"\((\d{4})\)$", title or "")
-                    if m:
-                        year = int(m.group(1))
-                        title = title[:m.start()].strip()
-                    if title:
-                        embed = self.tmdb.get_movie_metadata(title, year, file_path=s.get('uri'))
-                        if embed:
-                            for cid in channel_ids:
-                                channel = self.bot.get_channel(cid)
-                                if not channel:
-                                    try:
-                                        channel = await self.bot.fetch_channel(cid)
-                                    except Exception:
-                                        channel = None
-                                if channel:
-                                    try:
-                                        await channel.send(embed=embed)
-                                    except Exception:
-                                        pass
-                else:
-                    logger.warning(f"Scheduled movie #{s['number']} ({s.get('title')}) not found in playlist; no replacement match.")
-            except Exception as e:
-                logger.error(f"Error running scheduled movie: {e}")
-        # Remove all that have run
-        self.scheduled = [s for s in self.scheduled if s["dt"] > now]
-        if to_run:
-            self._save_schedule_backup()
+                self.pre_announce_sent.add(pre_announce_key)
+
+            due = [schedule for schedule in self.scheduled if schedule["dt"] <= now]
+            for schedule in due:
+                outcome = self._execute_due_schedule(
+                    schedule, resolved.get(id(schedule), (None, None))[1], now
+                )
+                if outcome in {"started", "recovered"}:
+                    await self._announce_schedule_started(schedule)
