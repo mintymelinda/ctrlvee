@@ -399,23 +399,33 @@ class Scheduler(commands.Cog):
                     await lock.acquire()
                     acquired.append(lock)
 
+                missing = False
+                save_failed = False
                 async with self._schedule_lock:
                     current = [s for s in self.scheduled if s["number"] == number]
-                    if any(all(s is not target for target in targets) for s in current):
+                    if not current:
+                        missing = True
+                    elif any(not any(s is target for target in targets) for s in current):
                         # A matching schedule was added while locks were being
                         # acquired. Retry with a complete, current lock set.
                         continue
-                    previous = self.scheduled
-                    self.scheduled = [s for s in previous if s["number"] != number]
-                    if not self._save_schedule_backup():
-                        self.scheduled = previous
-                        await ctx.send(
-                            "❌ Could not save the schedule changes. No schedules were removed."
-                        )
-                        return
-                    for schedule in targets:
-                        getattr(self, "_schedule_locks", {}).pop(id(schedule), None)
-                await ctx.send(f"Removed all schedules for movie #{number}.")
+                    else:
+                        previous = self.scheduled
+                        self.scheduled = [s for s in previous if s["number"] != number]
+                        if not self._save_schedule_backup():
+                            self.scheduled = previous
+                            save_failed = True
+                        else:
+                            for schedule in current:
+                                getattr(self, "_schedule_locks", {}).pop(id(schedule), None)
+                if missing:
+                    await ctx.send(f"No schedules found for movie #{number}.")
+                elif save_failed:
+                    await ctx.send(
+                        "❌ Could not save the schedule changes. No schedules were removed."
+                    )
+                else:
+                    await ctx.send(f"Removed all schedules for movie #{number}.")
                 return
             finally:
                 for lock in reversed(acquired):

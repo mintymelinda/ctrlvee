@@ -503,6 +503,41 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await operation
 
     @patch("src.config.Config.get_announce_channel_ids", return_value=[101])
+    async def test_start_announcement_send_does_not_hold_global_schedule_lock(self, _):
+        schedule = self.make_schedule(channel=None, status="announcing")
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler.tmdb.get_movie_metadata.return_value = None
+        channel = Mock()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_send(message):
+            entered.set()
+            await release.wait()
+
+        channel.send = AsyncMock(side_effect=blocked_send)
+        scheduler.bot.get_channel.return_value = channel
+        scheduler._save_schedule_backup.return_value = True
+
+        operation_lock = scheduler._get_schedule_lock(schedule)
+
+        async def announce():
+            async with operation_lock:
+                await scheduler._announce_schedule_started(schedule)
+
+        operation = asyncio.create_task(announce())
+        await entered.wait()
+        acquired = False
+        try:
+            await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
+            acquired = True
+        finally:
+            if acquired:
+                scheduler._schedule_lock.release()
+            release.set()
+        await operation
+
+    @patch("src.config.Config.get_announce_channel_ids", return_value=[101])
     async def test_unschedule_waits_for_inflight_announcement_before_removing(self, _):
         schedule = self.make_schedule(channel=None, status="announcing")
         scheduler = self.make_scheduler(schedule, Mock())
