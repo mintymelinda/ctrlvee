@@ -335,6 +335,54 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         finally:
             os.unlink(backup_path)
 
+    def test_backup_load_normalizes_numeric_execution_timestamp(self):
+        started = datetime(2026, 11, 10, 12, 1, 0, tzinfo=PH_TZ)
+        schedule = {
+            "number": 1,
+            "title": "Heat",
+            "dt": datetime.now(PH_TZ).isoformat(),
+            "status": "executing",
+            "execution_started_at": started.timestamp(),
+            "next_attempt_at": started.timestamp(),
+            "attempt_count": "2",
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as backup:
+            json.dump([schedule], backup)
+            backup_path = backup.name
+        try:
+            with patch("src.cogs.scheduler.SCHEDULE_BACKUP_FILE", backup_path):
+                loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
+            self.assertEqual(datetime.fromisoformat(loaded[0]["execution_started_at"]), started)
+            self.assertEqual(loaded[0]["next_attempt_at"], started)
+            self.assertEqual(loaded[0]["attempt_count"], 2)
+        finally:
+            os.unlink(backup_path)
+
+    def test_backup_load_resets_malformed_non_string_execution_state(self):
+        schedule = {
+            "number": 1,
+            "title": "Heat",
+            "dt": datetime.now(PH_TZ).isoformat(),
+            "status": "executing",
+            "execution_started_at": ["invalid"],
+            "next_attempt_at": {"invalid": "timestamp"},
+            "attempt_count": "not-a-number",
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as backup:
+            json.dump([schedule], backup)
+            backup_path = backup.name
+        try:
+            before = datetime.now(PH_TZ)
+            with patch("src.cogs.scheduler.SCHEDULE_BACKUP_FILE", backup_path):
+                loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
+            started = datetime.fromisoformat(loaded[0]["execution_started_at"])
+            self.assertEqual(loaded[0]["status"], "executing")
+            self.assertGreaterEqual(started, before)
+            self.assertNotIn("next_attempt_at", loaded[0])
+            self.assertEqual(loaded[0]["attempt_count"], 0)
+        finally:
+            os.unlink(backup_path)
+
     def test_backup_load_preserves_ambiguous_execution_claim_with_fresh_confirmation_window(self):
         schedule = {
             "number": 1,

@@ -169,16 +169,31 @@ class Scheduler(commands.Cog):
                 continue
 
             schedule.setdefault("status", "pending")
-            schedule.setdefault("attempt_count", 0)
+            try:
+                attempt_count = schedule.get("attempt_count", 0)
+                if isinstance(attempt_count, bool):
+                    raise ValueError("boolean attempt count")
+                schedule["attempt_count"] = max(0, int(attempt_count))
+            except (TypeError, ValueError, OverflowError):
+                logger.warning(
+                    "Resetting invalid attempt count for scheduled movie '%s'",
+                    schedule.get("title", "Unknown"),
+                )
+                schedule["attempt_count"] = 0
 
             retry_at = schedule.get("next_attempt_at")
-            if isinstance(retry_at, str):
+            if retry_at is not None:
                 try:
-                    retry_at = datetime.fromisoformat(retry_at)
+                    if isinstance(retry_at, str):
+                        retry_at = datetime.fromisoformat(retry_at)
+                    elif isinstance(retry_at, bool) or not isinstance(retry_at, (int, float)):
+                        raise ValueError("unsupported retry timestamp")
+                    else:
+                        retry_at = datetime.fromtimestamp(retry_at, tz=PH_TZ)
                     if retry_at.tzinfo is None:
                         retry_at = retry_at.replace(tzinfo=PH_TZ)
                     schedule["next_attempt_at"] = retry_at
-                except ValueError:
+                except (OverflowError, OSError, TypeError, ValueError):
                     logger.warning(
                         "Ignoring invalid retry timestamp for scheduled movie '%s'",
                         schedule.get("title", "Unknown"),
@@ -186,13 +201,18 @@ class Scheduler(commands.Cog):
                     schedule.pop("next_attempt_at", None)
 
             started_at = schedule.get("execution_started_at")
-            if isinstance(started_at, str):
+            if started_at is not None:
                 try:
-                    started_at = datetime.fromisoformat(started_at)
+                    if isinstance(started_at, str):
+                        started_at = datetime.fromisoformat(started_at)
+                    elif isinstance(started_at, bool) or not isinstance(started_at, (int, float)):
+                        raise ValueError("unsupported execution timestamp")
+                    else:
+                        started_at = datetime.fromtimestamp(started_at, tz=PH_TZ)
                     if started_at.tzinfo is None:
                         started_at = started_at.replace(tzinfo=PH_TZ)
                     schedule["execution_started_at"] = started_at.isoformat()
-                except ValueError:
+                except (OverflowError, OSError, TypeError, ValueError):
                     if schedule.get("status") == "executing":
                         # An invalid claim timestamp is ambiguous. Start a fresh
                         # confirmation window rather than immediately replaying it.
