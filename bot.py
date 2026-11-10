@@ -64,10 +64,12 @@ from src.services.tmdb_service import TMDBService
 from src.services.watch_folder_service import WatchFolderService
 from src.utils.media_utils import MediaUtils
 from src.services.radarr_service import RadarrService
+from src.services.stats_service import StatsService
 
 vlc = VLCController(bot=bot)
 tmdb_service = TMDBService()
 watch_service = WatchFolderService(vlc)
+stats_service = StatsService(path=Config.WATCH_STATS_FILE, excluded=Config.STATS_EXCLUDED_USER_IDS)
 _radarr_services = []
 try:
     # Build Radarr service instances from config (multi or single)
@@ -261,6 +263,7 @@ from src.cogs.playback import PlaybackCommands
 from src.cogs.playlist import PlaylistCommands
 from src.cogs.scheduler import Scheduler
 from src.cogs.watch import WatchCommands
+from src.cogs.stats import StatsCommands
 from src.version import __version__
 from changelog_helper import parse_changelog
 
@@ -599,6 +602,11 @@ async def setup_hook():
         await bot.add_cog(PlaylistCommands(bot, vlc, tmdb_service, watch_service))
         await bot.add_cog(Scheduler(bot, vlc))
         await bot.add_cog(WatchCommands(bot, watch_service, vlc))
+        if Config.ENABLE_WATCH_STATS:
+            await bot.add_cog(StatsCommands(bot, vlc, stats_service))
+            logger.info('Watch statistics enabled')
+        else:
+            logger.info('Watch statistics disabled (set ENABLE_WATCH_STATS=true to enable)')
         logger.info("Cogs loaded successfully")
     except Exception as e:
         logger.error(f"Error loading cogs: {e}")
