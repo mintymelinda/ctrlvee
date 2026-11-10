@@ -440,9 +440,17 @@ class PlaylistCommands(commands.Cog):
                 
             # Play the first match
             playlist_num, item = results[0]
+            playback_cog = self.bot.get_cog("PlaybackCommands")
+            if playback_cog:
+                allowed, reason = playback_cog._playback_guard(ctx.author)
+                if not allowed:
+                    await ctx.send(reason)
+                    return
             item_id = item.get('id')
             
             if self.vlc.play_item(item_id):
+                if playback_cog:
+                    playback_cog._seat_playback_owner(ctx.author, item_id)
                 logger.info(f"Playing search result: {item.get('name')} (#{playlist_num})")
                 hint = ""
                 if len(results) > 1:

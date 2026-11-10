@@ -48,6 +48,15 @@ def _normalize_path(val: str) -> str:
     return os.path.normpath(os.path.abspath(os.path.expanduser(val)))
 
 
+def path_is_under(path: str, folder: str) -> bool:
+    """Return whether path is the folder itself or is contained beneath it."""
+    normalized_path = os.path.normcase(os.path.normpath(path))
+    normalized_folder = os.path.normcase(os.path.normpath(folder))
+    return normalized_path == normalized_folder or normalized_path.startswith(
+        normalized_folder.rstrip(os.sep) + os.sep
+    )
+
+
 def _split_watch_folders_value(val: str) -> List[str]:
     if not val:
         return []
@@ -196,6 +205,8 @@ class Config:
     ENABLE_VOICE_JOIN: bool = os.getenv('ENABLE_VOICE_JOIN', 'true').strip().lower() in {'1','true','yes','y'}
     # Discord voice channel ID for the bot to join
     VOICE_JOIN_CHANNEL_ID: int = int(os.getenv('VOICE_JOIN_CHANNEL_ID', '0'))
+    # Require the requester to be in the configured room and prevent track hijacking.
+    ENABLE_VOICE_ROOM_RULES: bool = os.getenv('ENABLE_VOICE_ROOM_RULES', 'true').strip().lower() in {'1', 'true', 'yes', 'y'}
     # Whether to join voice immediately on startup (default: true)
     VOICE_AUTO_JOIN_ON_START: bool = os.getenv('VOICE_AUTO_JOIN_ON_START', 'true').strip().lower() in {'1','true','yes','y'}
     # Voice reconnect and connection tuning

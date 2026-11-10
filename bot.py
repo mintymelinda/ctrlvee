@@ -598,7 +598,7 @@ async def setup_hook():
         await bot.add_cog(PlaybackCommands(bot, vlc, tmdb_service, watch_service))
         await bot.add_cog(PlaylistCommands(bot, vlc, tmdb_service, watch_service))
         await bot.add_cog(Scheduler(bot, vlc))
-        await bot.add_cog(WatchCommands(bot))
+        await bot.add_cog(WatchCommands(bot, watch_service, vlc))
         logger.info("Cogs loaded successfully")
     except Exception as e:
         logger.error(f"Error loading cogs: {e}")
