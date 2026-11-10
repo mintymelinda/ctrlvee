@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.cogs.scheduler import PH_TZ, Scheduler, _resolve_schedule_index
 
@@ -64,7 +64,7 @@ class ScheduleRebindingTests(unittest.TestCase):
 
 
 
-class ScheduledPlaybackLifecycleTests(unittest.TestCase):
+class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def make_scheduler(self, schedule, vlc):
         scheduler = Scheduler.__new__(Scheduler)
         scheduler.bot = Mock()
@@ -297,7 +297,7 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         schedule = self.make_schedule()
         scheduler = self.make_scheduler(schedule, Mock())
         ctx = Mock()
-        ctx.send = __import__("unittest").mock.AsyncMock()
+        ctx.send = AsyncMock()
         await scheduler._schedule_lock.acquire()
         try:
             task = asyncio.create_task(
@@ -317,7 +317,7 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         scheduler = self.make_scheduler(schedule, Mock())
         scheduler._save_schedule_backup.return_value = False
         ctx = Mock()
-        ctx.send = __import__("unittest").mock.AsyncMock()
+        ctx.send = AsyncMock()
 
         await Scheduler.unschedule.callback(scheduler, ctx, 1)
 
