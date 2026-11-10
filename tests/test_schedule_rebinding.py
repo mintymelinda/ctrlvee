@@ -327,9 +327,10 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
                 loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
             self.assertEqual(loaded[0]["dt"].tzinfo, PH_TZ)
             self.assertEqual(loaded[0]["next_attempt_at"].tzinfo, PH_TZ)
+            restored_started = datetime.fromisoformat(loaded[0]["execution_started_at"])
             self.assertEqual(
-                datetime.fromisoformat(loaded[0]["execution_started_at"]).tzinfo,
-                PH_TZ,
+                restored_started.utcoffset(),
+                PH_TZ.utcoffset(naive_started),
             )
         finally:
             os.unlink(backup_path)
