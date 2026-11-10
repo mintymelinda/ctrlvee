@@ -102,7 +102,11 @@ class Scheduler(commands.Cog):
 
     def _rebind_due_schedules(self, now) -> dict:
         """Resolve schedules due within ten minutes and persist updated indexes."""
-        due = [s for s in self.scheduled if (s["dt"] - now).total_seconds() <= 600]
+        due = [
+            s for s in self.scheduled
+            if s.get("status") != "announcing"
+            and (s["dt"] - now).total_seconds() <= 600
+        ]
         if not due:
             return {}
 
@@ -174,6 +178,20 @@ class Scheduler(commands.Cog):
                 sent_channels = []
             schedule["pre_announce_sent_channels"] = [
                 channel_id for channel_id in sent_channels
+                if isinstance(channel_id, int) and not isinstance(channel_id, bool)
+            ]
+            started_channels = schedule.get("started_announcement_sent_channels", [])
+            if not isinstance(started_channels, list):
+                started_channels = []
+            schedule["started_announcement_sent_channels"] = [
+                channel_id for channel_id in started_channels
+                if isinstance(channel_id, int) and not isinstance(channel_id, bool)
+            ]
+            metadata_channels = schedule.get("started_metadata_sent_channels", [])
+            if not isinstance(metadata_channels, list):
+                metadata_channels = []
+            schedule["started_metadata_sent_channels"] = [
+                channel_id for channel_id in metadata_channels
                 if isinstance(channel_id, int) and not isinstance(channel_id, bool)
             ]
             try:
@@ -381,6 +399,9 @@ class Scheduler(commands.Cog):
 
     def _execute_due_schedule(self, schedule, leaf, now):
         """Execute one due schedule with a durable claim and restart reconciliation."""
+        if schedule.get("status") == "announcing":
+            return "announcing"
+
         item_id = leaf.get("id") if leaf is not None else None
 
         # If a previous process died after sending the command, reconcile against
@@ -393,12 +414,14 @@ class Scheduler(commands.Cog):
                 and str(item_id) == str(claimed_item_id)
                 and leaf.get("current") is not None
             ):
-                self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
+                schedule["status"] = "announcing"
+                schedule.setdefault("started_announcement_sent_channels", [])
+                schedule.setdefault("started_metadata_sent_channels", [])
                 if not self._save_schedule_backup():
-                    self.scheduled.append(schedule)
+                    schedule["status"] = "executing"
                     return "confirming"
                 logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))
-                return "recovered"
+                return "announcing"
 
             # VLC's HTTP command response does not confirm that pl_play actually
             # changed the current item. Allow a short transition window before
@@ -503,11 +526,13 @@ class Scheduler(commands.Cog):
             )
             return "confirming"
 
-        self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
+        schedule["status"] = "announcing"
+        schedule.setdefault("started_announcement_sent_channels", [])
+        schedule.setdefault("started_metadata_sent_channels", [])
         if not self._save_schedule_backup():
-            self.scheduled.append(schedule)
+            schedule["status"] = "executing"
             return "confirming"
-        return "started"
+        return "announcing"
 
     async def _pre_announce_schedule(self, schedule):
         """Deliver the ten-minute reminder once per channel, persisting successes."""
@@ -550,29 +575,20 @@ class Scheduler(commands.Cog):
             self.pre_announce_sent.add((schedule["number"], schedule["dt"]))
 
     async def _announce_schedule_started(self, schedule):
-        """Send playback and metadata announcements after VLC accepts the command."""
+        """Persist successful per-channel start announcements and retry failures."""
         from src.config import Config
 
-        announce_ids = Config.get_announce_channel_ids()
-        channel_ids = set(announce_ids or [])
+        channel_ids = set(Config.get_announce_channel_ids() or [])
         if schedule.get("channel"):
             channel_ids.add(schedule["channel"])
+        sent_channels = set(schedule.get("started_announcement_sent_channels", []))
+        metadata_channels = set(schedule.get("started_metadata_sent_channels", []))
         role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
         mention = f'<@&{role_id}>' if role_id else ''
-        msg = f"{mention} 🎬 Scheduled movie #{schedule['number']} ({schedule.get('title', 'Unknown')}) is now playing!".strip()
-
-        for cid in channel_ids:
-            channel = self.bot.get_channel(cid)
-            if not channel:
-                try:
-                    channel = await self.bot.fetch_channel(cid)
-                except Exception:
-                    channel = None
-            if channel:
-                try:
-                    await channel.send(msg)
-                except Exception:
-                    pass
+        message = (
+            f"{mention} 🎬 Scheduled movie #{schedule['number']} "
+            f"({schedule.get('title', 'Unknown')}) is now playing!"
+        ).strip()
 
         title = schedule.get("title")
         year = None
@@ -580,21 +596,66 @@ class Scheduler(commands.Cog):
         if match:
             year = int(match.group(1))
             title = title[:match.start()].strip()
+        embed = None
         if title:
-            embed = self.tmdb.get_movie_metadata(title, year, file_path=schedule.get("uri"))
-            if embed:
-                for cid in channel_ids:
-                    channel = self.bot.get_channel(cid)
-                    if not channel:
-                        try:
-                            channel = await self.bot.fetch_channel(cid)
-                        except Exception:
-                            channel = None
-                    if channel:
-                        try:
-                            await channel.send(embed=embed)
-                        except Exception:
-                            pass
+            try:
+                embed = self.tmdb.get_movie_metadata(
+                    title, year, file_path=schedule.get("uri")
+                )
+            except Exception:
+                logger.exception(
+                    "Could not retrieve metadata for scheduled movie '%s'",
+                    schedule.get("title", "Unknown"),
+                )
+
+        for channel_id in sorted(channel_ids):
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except Exception:
+                    continue
+            if not channel:
+                continue
+
+            if channel_id not in sent_channels:
+                try:
+                    await channel.send(message)
+                except Exception:
+                    continue
+                sent_channels.add(channel_id)
+                schedule["started_announcement_sent_channels"] = sorted(sent_channels)
+                if not self._save_schedule_backup():
+                    logger.error(
+                        "Could not persist start announcement for scheduled movie '%s' "
+                        "and channel %s",
+                        schedule.get("title", "Unknown"), channel_id,
+                    )
+
+            if embed is not None and channel_id not in metadata_channels:
+                try:
+                    await channel.send(embed=embed)
+                except Exception:
+                    continue
+                metadata_channels.add(channel_id)
+                schedule["started_metadata_sent_channels"] = sorted(metadata_channels)
+                if not self._save_schedule_backup():
+                    logger.error(
+                        "Could not persist metadata announcement for scheduled movie '%s' "
+                        "and channel %s",
+                        schedule.get("title", "Unknown"), channel_id,
+                    )
+
+        if not channel_ids.issubset(sent_channels):
+            return False
+        if embed is not None and not channel_ids.issubset(metadata_channels):
+            return False
+
+        self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
+        if not self._save_schedule_backup():
+            self.scheduled.append(schedule)
+            return False
+        return True
 
     @tasks.loop(seconds=30)
     async def check_schedules(self):
@@ -624,5 +685,5 @@ class Scheduler(commands.Cog):
                 outcome = self._execute_due_schedule(
                     schedule, resolved.get(id(schedule), (None, None))[1], now
                 )
-                if outcome in {"started", "recovered"}:
+                if outcome == "announcing":
                     await self._announce_schedule_started(schedule)

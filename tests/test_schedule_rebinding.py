@@ -154,11 +154,47 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
 
-        self.assertEqual(outcome, "started")
-        self.assertEqual(scheduler.scheduled, [])
-        self.assertEqual(schedule["status"], "executing")
+        self.assertEqual(outcome, "announcing")
+        self.assertEqual(scheduler.scheduled, [schedule])
+        self.assertEqual(schedule["status"], "announcing")
         self.assertEqual(vlc.play_item.call_count, 1)
         self.assertEqual(scheduler._save_schedule_backup.call_count, 2)
+
+    @patch("src.config.Config.get_announce_channel_ids", return_value=[101, 202])
+    async def test_start_announcement_retries_failed_channel_without_resending_successful_channel(self, _):
+        schedule = self.make_schedule(
+            channel=None, status="announcing",
+            started_announcement_sent_channels=[],
+        )
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler.tmdb.get_movie_metadata.return_value = None
+        first = Mock()
+        first.send = AsyncMock()
+        second = Mock()
+        second.send = AsyncMock(side_effect=[RuntimeError("temporary Discord failure"), None])
+        scheduler.bot.get_channel.side_effect = lambda channel_id: {101: first, 202: second}.get(channel_id)
+        scheduler._save_schedule_backup.return_value = True
+
+        await scheduler._announce_schedule_started(schedule)
+        self.assertEqual(first.send.await_count, 1)
+        self.assertEqual(second.send.await_count, 1)
+        self.assertEqual(schedule["started_announcement_sent_channels"], [101])
+        self.assertEqual(scheduler.scheduled, [schedule])
+
+        await scheduler._announce_schedule_started(schedule)
+        self.assertEqual(first.send.await_count, 1)
+        self.assertEqual(second.send.await_count, 2)
+        self.assertEqual(scheduler.scheduled, [])
+
+    def test_announcing_schedule_never_reissues_vlc_playback(self):
+        schedule = self.make_schedule(status="announcing")
+        vlc = Mock()
+        scheduler = self.make_scheduler(schedule, vlc)
+
+        outcome = scheduler._execute_due_schedule(schedule, None, datetime.now(PH_TZ))
+
+        self.assertEqual(outcome, "announcing")
+        vlc.play_item.assert_not_called()
 
     def test_xml_response_without_current_item_confirmation_retains_schedule(self):
         schedule = self.make_schedule()
@@ -278,8 +314,9 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         outcome = scheduler._execute_due_schedule(schedule, current_leaf, datetime.now(PH_TZ))
 
-        self.assertEqual(outcome, "recovered")
-        self.assertEqual(scheduler.scheduled, [])
+        self.assertEqual(outcome, "announcing")
+        self.assertEqual(scheduler.scheduled, [schedule])
+        self.assertEqual(schedule["status"], "announcing")
         vlc.play_item.assert_not_called()
 
     def test_restart_does_not_recover_when_rebound_target_has_a_different_id(self):
@@ -299,9 +336,10 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             schedule, rebound_leaf, datetime.now(PH_TZ)
         )
 
-        self.assertEqual(outcome, "started")
+        self.assertEqual(outcome, "announcing")
         vlc.play_item.assert_called_once_with("Alien (1979).mkv")
-        self.assertEqual(scheduler.scheduled, [])
+        self.assertEqual(scheduler.scheduled, [schedule])
+        self.assertEqual(schedule["status"], "announcing")
 
     def test_restart_retries_interrupted_attempt_when_target_is_not_current(self):
         schedule = self.make_schedule(status="executing", attempt_count=1)
@@ -316,9 +354,10 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
         outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
 
-        self.assertEqual(outcome, "started")
+        self.assertEqual(outcome, "announcing")
         vlc.play_item.assert_called_once_with("Heat (1995).mkv")
-        self.assertEqual(scheduler.scheduled, [])
+        self.assertEqual(scheduler.scheduled, [schedule])
+        self.assertEqual(schedule["status"], "announcing")
 
     def test_retry_state_survives_backup_reload(self):
         schedule = self.make_schedule(
