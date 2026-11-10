@@ -91,7 +91,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.config.Config.get_announce_channel_ids", return_value=[101, 202])
     async def test_pre_announce_retries_failed_channel_without_resending_successful_channel(self, _):
-        schedule = self.make_schedule(dt=datetime.now(PH_TZ) + timedelta(minutes=5))
+        schedule = self.make_schedule(channel=None, dt=datetime.now(PH_TZ) + timedelta(minutes=5))
         scheduler = self.make_scheduler(schedule, Mock())
         first = Mock()
         first.send = AsyncMock()
@@ -114,7 +114,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.config.Config.get_announce_channel_ids", return_value=[101])
     async def test_pre_announce_delivery_is_persisted_for_restart(self, _):
-        schedule = self.make_schedule()
+        schedule = self.make_schedule(channel=None)
         schedule["pre_announce_sent_channels"] = [101]
         scheduler = self.make_scheduler(schedule, Mock())
         channel = Mock()
