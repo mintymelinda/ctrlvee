@@ -291,14 +291,19 @@ class Scheduler(commands.Cog):
                 if elapsed < 90:
                     return "confirming"
 
-            attempts = max(1, int(schedule.get("attempt_count", 1)))
-            delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+                attempts = max(1, int(schedule.get("attempt_count", 1)))
+                delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+                schedule["status"] = "pending"
+                schedule.pop("execution_started_at", None)
+                schedule["last_error"] = "VLC did not confirm the scheduled item became current"
+                schedule["next_attempt_at"] = now.timestamp() + delay
+                self._save_schedule_backup()
+                return "retry"
+
+            # Older persisted claims may not have an execution timestamp. They
+            # cannot use the confirmation window, so retry them immediately.
             schedule["status"] = "pending"
             schedule.pop("execution_started_at", None)
-            schedule["last_error"] = "VLC did not confirm the scheduled item became current"
-            schedule["next_attempt_at"] = now.timestamp() + delay
-            self._save_schedule_backup()
-            return "retry"
 
         next_attempt = schedule.get("next_attempt_at")
         if next_attempt is not None:
