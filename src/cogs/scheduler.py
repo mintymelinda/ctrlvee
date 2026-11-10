@@ -169,6 +169,13 @@ class Scheduler(commands.Cog):
                 continue
 
             schedule.setdefault("status", "pending")
+            sent_channels = schedule.get("pre_announce_sent_channels", [])
+            if not isinstance(sent_channels, list):
+                sent_channels = []
+            schedule["pre_announce_sent_channels"] = [
+                channel_id for channel_id in sent_channels
+                if isinstance(channel_id, int) and not isinstance(channel_id, bool)
+            ]
             try:
                 attempt_count = schedule.get("attempt_count", 0)
                 if isinstance(attempt_count, bool):
@@ -502,6 +509,46 @@ class Scheduler(commands.Cog):
             return "confirming"
         return "started"
 
+    async def _pre_announce_schedule(self, schedule):
+        """Deliver the ten-minute reminder once per channel, persisting successes."""
+        from src.config import Config
+
+        channel_ids = set(Config.get_announce_channel_ids() or [])
+        if schedule.get("channel"):
+            channel_ids.add(schedule["channel"])
+        sent_channels = set(schedule.get("pre_announce_sent_channels", []))
+        role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
+        mention = f'<@&{role_id}>' if role_id else ''
+        message = (
+            f"{mention} ⏰ Reminder: Scheduled movie #{schedule['number']} "
+            f"({schedule.get('title', 'Unknown')}) will start in 10 minutes!"
+        ).strip()
+
+        for channel_id in channel_ids - sent_channels:
+            channel = self.bot.get_channel(channel_id)
+            if not channel:
+                try:
+                    channel = await self.bot.fetch_channel(channel_id)
+                except Exception:
+                    continue
+            if not channel:
+                continue
+            try:
+                await channel.send(message)
+            except Exception:
+                continue
+
+            sent_channels.add(channel_id)
+            schedule["pre_announce_sent_channels"] = sorted(sent_channels)
+            if not self._save_schedule_backup():
+                logger.error(
+                    "Could not persist reminder delivery for scheduled movie '%s' and channel %s",
+                    schedule.get("title", "Unknown"), channel_id,
+                )
+
+        if channel_ids and channel_ids.issubset(sent_channels):
+            self.pre_announce_sent.add((schedule["number"], schedule["dt"]))
+
     async def _announce_schedule_started(self, schedule):
         """Send playback and metadata announcements after VLC accepts the command."""
         from src.config import Config
@@ -570,26 +617,7 @@ class Scheduler(commands.Cog):
                 delta = (schedule["dt"] - now).total_seconds()
                 if not 0 < delta <= 600:
                     continue
-                channel_ids = set(Config.get_announce_channel_ids() or [])
-                if schedule.get("channel"):
-                    channel_ids.add(schedule["channel"])
-                role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
-                mention = f'<@&{role_id}>' if role_id else ''
-                for channel_id in channel_ids:
-                    channel = self.bot.get_channel(channel_id)
-                    if not channel:
-                        try:
-                            channel = await self.bot.fetch_channel(channel_id)
-                        except Exception:
-                            continue
-                    try:
-                        await channel.send(
-                            f"{mention} ⏰ Reminder: Scheduled movie #{schedule['number']} "
-                            f"({schedule.get('title', 'Unknown')}) will start in 10 minutes!".strip()
-                        )
-                    except Exception:
-                        pass
-                self.pre_announce_sent.add(pre_announce_key)
+                await self._pre_announce_schedule(schedule)
 
             due = [schedule for schedule in self.scheduled if schedule["dt"] <= now]
             for schedule in due:
