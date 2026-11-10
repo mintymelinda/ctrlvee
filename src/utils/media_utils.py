@@ -57,6 +57,16 @@ class MediaUtils:
                 logger.debug(f"Error parsing duration element: {e}")
         return None
     @staticmethod
+    def _strip_brackets(name: str) -> str:
+        """Preserve bracketed years while removing release tags and non-Latin aliases."""
+        name = re.sub(r'\[\s*((?:19|20)\d{2})\s*\]', r' \1 ', name)
+        name = re.sub(r'\[[^\]]*\]', ' ', name)
+        without_alt = re.sub(r'\(\s*[^\x00-\x7F()]+\s*\)', ' ', name)
+        if re.search(r'[A-Za-z]', without_alt):
+            name = without_alt
+        return name
+
+    @staticmethod
     def parse_movie_filename(filename: str) -> Tuple[str, Optional[int]]:
         """Parse a movie filename into a clean title and optional release year.
         
@@ -77,8 +87,8 @@ class MediaUtils:
         # Remove only known video extensions (avoid splitext confusion with scene tags like [eztv.re]).
         name = re.sub(r'(?i)\.(mkv|mp4|avi|mov|m4v|ts|m2ts|wmv|flv|webm)$', '', basename)
 
-        # Remove bracketed tracker/release suffixes often appended by indexers.
-        name = re.sub(r'\[[^\]]*\]', ' ', name)
+        # Preserve bracketed years, but remove tracker tags and non-Latin aliases.
+        name = MediaUtils._strip_brackets(name)
 
         # Normalize separators and remove brackets to simplify tokenization
         normalized = name.replace('.', ' ').replace('_', ' ')
@@ -195,8 +205,8 @@ class MediaUtils:
         # Remove only known video extensions (avoid splitext() confusion with scene tags like [eztv.re]).
         name = re.sub(r'(?i)\.(mkv|mp4|avi|mov|m4v|ts|m2ts|wmv|flv|webm)$', '', base)
 
-        # Remove bracketed tracker/release suffixes and normalize separators.
-        name = re.sub(r'\[[^\]]*\]', ' ', name)
+        # Preserve bracketed years, but remove tracker tags and non-Latin aliases.
+        name = MediaUtils._strip_brackets(name)
         work = name.replace('.', ' ').replace('_', ' ')
         work = re.sub(r'\s+', ' ', work).strip()
         
