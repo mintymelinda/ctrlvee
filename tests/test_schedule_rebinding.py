@@ -179,7 +179,7 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         self.assertEqual(scheduler.scheduled, [schedule])
         self.assertEqual(schedule["status"], "executing")
 
-    def test_failed_playback_retains_job_and_schedules_retry(self):
+    def test_ambiguous_vlc_failure_retains_claim_until_confirmation_timeout(self):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = None
@@ -188,11 +188,21 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
 
         outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), now)
 
-        self.assertEqual(outcome, "retry")
+        self.assertEqual(outcome, "confirming")
         self.assertEqual(scheduler.scheduled, [schedule])
-        self.assertEqual(schedule["status"], "pending")
+        self.assertEqual(schedule["status"], "executing")
         self.assertEqual(schedule["attempt_count"], 1)
-        self.assertGreater(schedule["next_attempt_at"], now.timestamp())
+        self.assertNotIn("next_attempt_at", schedule)
+        self.assertEqual(vlc.play_item.call_count, 1)
+
+        schedule["execution_started_at"] = (now - timedelta(seconds=120)).isoformat()
+        retry = scheduler._execute_due_schedule(
+            schedule, leaf("Heat (1995).mkv"), now + timedelta(seconds=120)
+        )
+
+        self.assertEqual(retry, "retry")
+        self.assertEqual(schedule["status"], "pending")
+        self.assertGreater(schedule["next_attempt_at"], (now + timedelta(seconds=120)).timestamp())
         self.assertEqual(vlc.play_item.call_count, 1)
 
     def test_retry_backoff_prevents_duplicate_attempt_before_due(self):

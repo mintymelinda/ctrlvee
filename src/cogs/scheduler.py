@@ -344,19 +344,17 @@ class Scheduler(commands.Cog):
             error = "VLC rejected the playback command"
 
         if not succeeded:
-            # The attempt count was already persisted with the execution claim.
-            attempts = int(schedule.get("attempt_count", 1))
-            delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
-            schedule["status"] = "pending"
-            schedule.pop("execution_started_at", None)
+            # A timeout or dropped HTTP connection is ambiguous: VLC may have
+            # executed the command before the response was lost. Keep the
+            # execution claim and confirm the current item before retrying.
             schedule["last_error"] = str(error)
-            schedule["next_attempt_at"] = now.timestamp() + delay
             self._save_schedule_backup()
             logger.warning(
-                "Scheduled movie '%s' failed to start; retrying in %ss: %s",
-                schedule.get("title", "Unknown"), delay, error,
+                "Scheduled movie '%s' has an unconfirmed VLC command; "
+                "retaining its execution claim: %s",
+                schedule.get("title", "Unknown"), error,
             )
-            return "retry"
+            return "confirming"
 
         # A successful HTTP/XML response only means VLC answered the request.
         # Confirm that the requested playlist item is now current before
