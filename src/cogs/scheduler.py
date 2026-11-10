@@ -524,7 +524,7 @@ class Scheduler(commands.Cog):
             f"({schedule.get('title', 'Unknown')}) will start in 10 minutes!"
         ).strip()
 
-        for channel_id in channel_ids - sent_channels:
+        for channel_id in sorted(channel_ids - sent_channels):
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 try:
