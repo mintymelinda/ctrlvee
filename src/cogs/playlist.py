@@ -1,4 +1,5 @@
 from typing import Optional, List, Tuple
+import asyncio
 import discord
 from discord.ext import commands
 import logging
@@ -199,6 +200,159 @@ class SearchResultsView(discord.ui.View):
         embed.set_footer(text=footer)
 
         await interaction.response.edit_message(embed=embed, view=self)
+
+class PlaySearchView(discord.ui.View):
+    """Requester-scoped, paginated button picker for ambiguous playlist searches."""
+
+    PAGE_SIZE = 5
+    MAX_RESULTS = 25
+
+    def __init__(self, cog, requester_id: int, results: List[Tuple[int, dict]]):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.requester_id = requester_id
+        self.results = results[:self.MAX_RESULTS]
+        self.page = 0
+        self.message = None
+        self.total_matches = len(results)
+        self._refresh_items()
+
+    @property
+    def page_count(self) -> int:
+        return max(1, (len(self.results) + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+
+    def _page_results(self, page: int) -> List[Tuple[int, dict]]:
+        start = page * self.PAGE_SIZE
+        return self.results[start:start + self.PAGE_SIZE]
+
+    def _build_embed(self) -> discord.Embed:
+        lines = []
+        for playlist_num, item in self._page_results(self.page):
+            name = MediaUtils.clean_filename_for_display(item.get("name", ""), max_length=100)
+            lines.append(f"#{playlist_num} {name}")
+        embed = discord.Embed(
+            title=f"Choose a match ({self.total_matches} total)",
+            description="\n".join(lines) or "No results on this page.",
+            color=discord.Color.blurple(),
+        )
+        if self.total_matches > len(self.results):
+            embed.description += (
+                f"\n\nShowing the top {len(self.results)} matches. "
+                "Refine your search to find other results."
+            )
+        if self.page_count > 1:
+            embed.set_footer(text=f"Page {self.page + 1} of {self.page_count}")
+        return embed
+
+    def _refresh_items(self) -> None:
+        self.clear_items()
+        for playlist_num, item in self._page_results(self.page):
+            title = MediaUtils.clean_filename_for_display(item.get("name", ""), max_length=68)
+            button = discord.ui.Button(
+                label=f"#{playlist_num} {title}"[:80],
+                style=discord.ButtonStyle.primary,
+                row=0,
+            )
+
+            async def choose(interaction: discord.Interaction, number=playlist_num):
+                await self._select(interaction, number)
+
+            button.callback = choose
+            self.add_item(button)
+
+        if self.page_count > 1:
+            previous = discord.ui.Button(
+                label="Previous",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page == 0,
+                row=1,
+            )
+            next_page = discord.ui.Button(
+                label="Next",
+                style=discord.ButtonStyle.secondary,
+                disabled=self.page >= self.page_count - 1,
+                row=1,
+            )
+            previous.callback = self._previous
+            next_page.callback = self._next
+            self.add_item(previous)
+            self.add_item(next_page)
+
+        cancel = discord.ui.Button(
+            label="Cancel",
+            style=discord.ButtonStyle.danger,
+            row=1,
+        )
+        cancel.callback = self._cancel
+        self.add_item(cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "That picker belongs to someone else.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def _previous(self, interaction: discord.Interaction) -> None:
+        self.page = max(0, self.page - 1)
+        self._refresh_items()
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    async def _next(self, interaction: discord.Interaction) -> None:
+        self.page = min(self.page_count - 1, self.page + 1)
+        self._refresh_items()
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    async def _cancel(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(
+            content="Playback selection cancelled.", embed=None, view=None
+        )
+
+    async def _select(self, interaction: discord.Interaction, playlist_num: int) -> None:
+        pair = next((result for result in self.results if result[0] == playlist_num), None)
+        if pair is None:
+            await interaction.response.send_message(
+                "That result is no longer available.", ephemeral=True
+            )
+            return
+        _, item = pair
+
+        playback_cog = self.cog.bot.get_cog("PlaybackCommands")
+        if playback_cog:
+            allowed, reason = playback_cog._playback_guard(interaction.user)
+            if not allowed:
+                await interaction.response.send_message(reason, ephemeral=True)
+                return
+
+        item_id = item.get("id")
+        if not item_id or not self.cog.vlc.play_item(item_id):
+            await interaction.response.send_message(
+                "Could not play the selected item.", ephemeral=True
+            )
+            return
+
+        if playback_cog:
+            playback_cog._seat_playback_owner(interaction.user, item_id)
+
+        self.stop()
+        await interaction.response.edit_message(
+            content=f"Loading item #{playlist_num}...", embed=None, view=None
+        )
+        await self.cog._send_search_metadata(
+            interaction.followup.send, item, playlist_num
+        )
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
 
 class PlaylistCommands(commands.Cog):
     def __init__(self, bot: commands.Bot, vlc_controller, tmdb_service, watch_service):
@@ -428,50 +582,65 @@ class PlaylistCommands(commands.Cog):
             logger.error(f"Error searching playlist: {e}")
             await ctx.send(f'Error searching playlist: {str(e)}')
 
+    async def _send_search_metadata(self, send, item, playlist_num: int) -> None:
+        """Send selected-item metadata without blocking the Discord event loop."""
+        try:
+            search_title, search_year = MediaUtils.parse_movie_filename(item.get("name", ""))
+            movie_embed = await asyncio.to_thread(
+                self.tmdb.get_movie_metadata,
+                search_title,
+                search_year,
+                file_path=item.get("uri"),
+            )
+            edition_tag = MediaUtils.extract_edition_tag(item.get("name", ""))
+            if movie_embed:
+                if edition_tag:
+                    movie_embed.add_field(name="Edition", value=edition_tag, inline=True)
+                movie_embed.set_footer(text=f"Now Playing #{playlist_num}")
+                await send(embed=movie_embed)
+            else:
+                name = item.get("name", "")
+                icon = MediaUtils.get_media_icon(name)
+                basename = MediaUtils.clean_filename_for_display(name)
+                await send(f"Playing: {icon} #{playlist_num} {basename}")
+        except Exception as e:
+            logger.error("Error sending selected search metadata: %s", e)
+
     @commands.command(name='play_search')
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def play_search(self, ctx: commands.Context, *, query: str):
-        """Search for and play an item from the playlist"""
+        """Search the playlist and play a unique match or show an interactive picker."""
         try:
             results = self._search_items(query)
             if not results:
-                await ctx.send('No matches found in playlist')
+                await ctx.send("No matches found in playlist")
                 return
-                
-            # Play the first match
-            playlist_num, item = results[0]
-            item_id = item.get('id')
-            
-            if self.vlc.play_item(item_id):
-                logger.info(f"Playing search result: {item.get('name')} (#{playlist_num})")
-                hint = ""
-                if len(results) > 1:
-                    hint = f"\n💡 Top match selected from {len(results)} results."
-                await ctx.send(f'Loading item #{playlist_num}...{hint}')
-                
-                # Get parsed title and optional year for metadata search
-                search_title, search_year = MediaUtils.parse_movie_filename(item.get('name'))
-                movie_embed = self.tmdb.get_movie_metadata(search_title, search_year, file_path=item.get('uri'))
-                edition_tag = MediaUtils.extract_edition_tag(item.get('name'))
-                
-                if movie_embed:
-                    if edition_tag:
-                        try:
-                            movie_embed.add_field(name="Edition", value=edition_tag, inline=True)
-                        except Exception:
-                            pass
-                    movie_embed.set_footer(text=f"Now Playing #{playlist_num}")
-                    await ctx.send(embed=movie_embed)
-                else:
-                    name = item.get('name', '')
-                    icon = MediaUtils.get_media_icon(name)
-                    basename = MediaUtils.clean_filename_for_display(name)
-                    await ctx.send(f'Playing: {icon}`{playlist_num}` {basename}')
-            else:
-                await ctx.send('Error: Could not play the selected item')
+
+            if len(results) == 1:
+                playlist_num, item = results[0]
+                playback_cog = self.bot.get_cog("PlaybackCommands")
+                if playback_cog:
+                    allowed, reason = playback_cog._playback_guard(ctx.author)
+                    if not allowed:
+                        await ctx.send(reason)
+                        return
+                item_id = item.get("id")
+                if not item_id or not self.vlc.play_item(item_id):
+                    await ctx.send("Error: Could not play the selected item")
+                    return
+                if playback_cog:
+                    playback_cog._seat_playback_owner(ctx.author, item_id)
+                await ctx.send(f"Loading item #{playlist_num}...")
+                await self._send_search_metadata(ctx.send, item, playlist_num)
+                return
+
+            view = PlaySearchView(self, ctx.author.id, results)
+            embed = view._build_embed()
+            message = await ctx.send(embed=embed, view=view)
+            view.message = message
         except Exception as e:
-            logger.error(f"Error in play_search: {e}")
-            await ctx.send(f'Error searching and playing: {str(e)}')
+            logger.error("Error in play_search: %s", e)
+            await ctx.send(f"Error searching and playing: {str(e)}")
 
     @commands.command(name='list')
     async def list_playlist(self, ctx: commands.Context):

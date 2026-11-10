@@ -5,13 +5,22 @@ import threading
 import logging
 from typing import Iterable, Set, Optional, List, Callable
 
-from ..config import Config, get_watch_folders_from_env
+from ..config import Config, get_watch_folders_from_env, path_is_under
+from ..utils.media_utils import MediaUtils
 
 
 MEDIA_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg",
     ".mp3", ".flac", ".aac", ".wav", ".ogg"
 }
+
+
+def _episode_sort_key(path: str) -> tuple:
+    """Sort parsed TV episodes by season/episode, then non-episode media by name."""
+    _, season, episode, _ = MediaUtils.parse_tv_filename(path)
+    if season is not None and episode is not None:
+        return (0, season, episode, os.path.basename(path))
+    return (1, 0, 0, os.path.basename(path))
 
 
 class WatchFolderService:
@@ -25,6 +34,8 @@ class WatchFolderService:
         self._stop_event = threading.Event()
         self._thread = None
         self._seen = set()
+        # Serialize complete scans with explicit watch-folder removals.
+        self.lock = threading.RLock()
         # Files being tracked for stability across scans: path -> (size, first_seen_time)
         self._pending = {}
         self._notifier = None
@@ -118,6 +129,34 @@ class WatchFolderService:
                 time.sleep(0.5)
                 slept += 0.5
 
+    def sync_folders(self, folders: List[str], forget_removed: bool = False) -> List[str]:
+        """Replace the in-memory folder list and return folders that were dropped.
+
+        Explicit removal forgets seen/pending files beneath removed folders so a
+        later re-add can discover them again. Background config reloads retain
+        those records to avoid re-enqueueing everything after a transient config
+        change.
+        """
+        with self.lock:
+            wanted = [os.path.normpath(os.path.abspath(path)) for path in folders if path]
+            added = [folder for folder in wanted if folder not in self.folders]
+            removed = [folder for folder in self.folders if folder not in wanted]
+            if added:
+                self.logger.info("Hot-loading new watch folders: %s", ", ".join(added))
+            if removed:
+                self.logger.info("Dropping removed watch folders: %s", ", ".join(removed))
+                if forget_removed:
+                    self._seen = {
+                        path for path in self._seen
+                        if not any(path_is_under(path, folder) for folder in removed)
+                    }
+                    self._pending = {
+                        path: value for path, value in self._pending.items()
+                        if not any(path_is_under(path, folder) for folder in removed)
+                    }
+            self.folders = wanted
+            return removed
+
     def _iter_media_files(self, base: str) -> Iterable[str]:
         for root, dirs, files in os.walk(base, followlinks=True):
             # Skip hidden directories
@@ -166,6 +205,10 @@ class WatchFolderService:
         return False
 
     def _scan_all(self, add_to_playlist: bool):
+        with self.lock:
+            self._scan_all_locked(add_to_playlist)
+
+    def _scan_all_locked(self, add_to_playlist: bool):
         # Reload .env to pick up new folders
         try:
             from dotenv import load_dotenv
@@ -179,7 +222,7 @@ class WatchFolderService:
 
         parsed_folders = get_watch_folders_from_env()
 
-        # Hot-reload folders from env (only add new ones)
+        # Hot-reload additions and removals from config while holding the scan lock.
         current_folders = set(os.path.normpath(os.path.abspath(p)) for p in self.folders)
         config_folders = set(parsed_folders)
 
@@ -194,12 +237,8 @@ class WatchFolderService:
                 self.logger.info(f"WATCH_FOLDERS changed: '{self._last_env_val or ''}' -> '{env_val}'")
             self._last_env_val = env_snapshot
 
-        new_folders = sorted(config_folders - current_folders)
-        if new_folders:
-            self.logger.info(f"Hot-loading new watch folders: {', '.join(new_folders)}")
-            for f in new_folders:
-                if f not in self.folders:
-                    self.folders.append(f)
+        if config_folders != current_folders:
+            self.sync_folders(parsed_folders)
 
         new_files = []
         pending_before = len(self._pending)
@@ -244,6 +283,9 @@ class WatchFolderService:
         if not add_to_playlist:
             self.logger.info("Initial discovery only (not enqueuing this pass)")
             return
+
+        # Filesystem traversal order is not episode order; sort TV episodes before enqueue.
+        new_files.sort(key=_episode_sort_key)
 
         # Enqueue each new file by path
         enqueued: List[str] = []
