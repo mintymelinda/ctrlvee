@@ -38,6 +38,8 @@ class VLCController:
         # Queue management state
         self._queued_items = {}  # item_id -> queue_info
         self._shuffle_restore_queue = []  # List of items that need shuffle restored after playing
+        self._pending_queue_item_id = None
+        self._pending_queue_started_at = None
         
         # Load queue state from backup file
         self._load_queue_backup()
@@ -992,6 +994,7 @@ class VLCController:
             
             # For soft queue, we don't move items physically
             # Instead, we track the queue order in memory
+            self._compact_queue_order()
             existing_queue_count = len(self._queued_items)
             queue_order = existing_queue_count + 1
             
@@ -1065,6 +1068,18 @@ class VLCController:
             return self.toggle_shuffle()
         return True
     
+    def _compact_queue_order(self):
+        """Renumber queued items so their visible positions are contiguous."""
+        ordered_items = sorted(
+            self._queued_items.items(),
+            key=lambda entry: (
+                entry[1].get("queue_order", 0),
+                entry[1].get("queued_at_time", 0),
+            ),
+        )
+        for queue_order, (_item_id, queue_info) in enumerate(ordered_items, start=1):
+            queue_info["queue_order"] = queue_order
+
     def get_next_queued_item(self):
         """Get the next item that should play from the soft queue
         
@@ -1097,6 +1112,14 @@ class VLCController:
         Returns:
             dict: Result of playing the next queued item
         """
+        if self._pending_queue_item_id in self._queued_items:
+            return {
+                "success": False,
+                "error": f"Queued item {self._pending_queue_item_id} is already starting",
+            }
+        self._pending_queue_item_id = None
+        self._pending_queue_started_at = None
+
         next_item = self.get_next_queued_item()
         if not next_item:
             return {"success": False, "error": "No items in queue"}
@@ -1120,11 +1143,13 @@ class VLCController:
                     self.logger.info(f"Restoring shuffle mode - last queued item ({item_name}) is now playing")
                     self.toggle_shuffle()
             
-            # Remove the item from the queue since we triggered it to play
-            # (This will also clear shuffle restore queue if queue becomes empty)
-            self._remove_from_queue(item_id)
-            
-            self.logger.info(f"Playing next queued item: {item_name} (ID: {item_id}) - removed from queue")
+            # Keep the item tracked until the monitor confirms that it became
+            # the current playlist item. This prevents the same observation from
+            # being mistaken for natural progression to the next queued item.
+            self._pending_queue_item_id = item_id
+            self._pending_queue_started_at = __import__('time').time()
+
+            self.logger.info(f"Started queued item: {item_name} (ID: {item_id})")
             return {
                 "success": True,
                 "item_id": item_id,
@@ -1150,6 +1175,34 @@ class VLCController:
             dict: Information about any queue transitions that occurred
         """
         transitions = []
+
+        # A successful play command can precede VLC reporting the new current
+        # item. Ignore stale observations so they cannot issue a duplicate play.
+        if self._pending_queue_item_id is not None:
+            if current_item_id == self._pending_queue_item_id:
+                self.logger.info(
+                    f"VLC confirmed queued item {current_item_id} is now playing"
+                )
+                self._pending_queue_item_id = None
+                self._pending_queue_started_at = None
+            else:
+                pending_age = (
+                    __import__('time').time() - self._pending_queue_started_at
+                    if self._pending_queue_started_at is not None
+                    else 0
+                )
+                if pending_age < 30:
+                    return {
+                        "transitions": transitions,
+                        "active_queue_items": len(self._queued_items),
+                        "pending_shuffle_restores": len(self._shuffle_restore_queue),
+                    }
+                self.logger.warning(
+                    f"Queued item {self._pending_queue_item_id} was not observed "
+                    "within 30 seconds; allowing queue playback to retry"
+                )
+                self._pending_queue_item_id = None
+                self._pending_queue_started_at = None
         
         # First, check if the current item is one we were tracking
         # If so, it means it just started playing (either queued or natural progression)
@@ -1218,6 +1271,8 @@ class VLCController:
         """Clear all queue tracking state (useful for reset/cleanup)"""
         self._queued_items.clear()
         self._shuffle_restore_queue.clear()  # Also clear shuffle restore queue
+        self._pending_queue_item_id = None
+        self._pending_queue_started_at = None
         self._save_queue_backup()
         self.logger.info("Cleared all queue tracking state including shuffle restore queue")
 
@@ -1333,8 +1388,12 @@ class VLCController:
         queue_info = self._queued_items[item_id]
         should_restore_shuffle = queue_info.get("restore_shuffle", False)
         
-        # Remove from the main queue
+        # Remove from the main queue and keep displayed positions contiguous.
         del self._queued_items[item_id]
+        self._compact_queue_order()
+        if self._pending_queue_item_id == item_id:
+            self._pending_queue_item_id = None
+            self._pending_queue_started_at = None
         self.logger.debug(f"Removed item {item_id} from queue")
         
         # If the queue is now empty, clear the shuffle restore queue too
