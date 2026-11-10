@@ -266,7 +266,13 @@ class Scheduler(commands.Cog):
         # If a previous process died after sending the command, reconcile against
         # VLC's current item before deciding whether another command is needed.
         if schedule.get("status") == "executing":
-            if item_id is not None and leaf.get("current") is not None:
+            claimed_item_id = schedule.get("target_item_id")
+            if (
+                item_id is not None
+                and claimed_item_id is not None
+                and str(item_id) == str(claimed_item_id)
+                and leaf.get("current") is not None
+            ):
                 self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
                 self._save_schedule_backup()
                 logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))

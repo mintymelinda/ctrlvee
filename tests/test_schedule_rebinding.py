@@ -130,7 +130,9 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         vlc.play_item.assert_not_called()
 
     def test_restart_recovers_schedule_already_playing_without_replaying(self):
-        schedule = self.make_schedule(status="executing", attempt_count=1)
+        schedule = self.make_schedule(
+            status="executing", attempt_count=1, target_item_id="Heat (1995).mkv"
+        )
         vlc = Mock()
         scheduler = self.make_scheduler(schedule, vlc)
         current_leaf = leaf("Heat (1995).mkv")
@@ -141,6 +143,24 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         self.assertEqual(outcome, "recovered")
         self.assertEqual(scheduler.scheduled, [])
         vlc.play_item.assert_not_called()
+
+    def test_restart_does_not_recover_when_a_different_item_is_current(self):
+        schedule = self.make_schedule(
+            status="executing", attempt_count=1, target_item_id="Heat (1995).mkv"
+        )
+        vlc = Mock()
+        vlc.play_item.return_value = object()
+        scheduler = self.make_scheduler(schedule, vlc)
+        unrelated_current_leaf = leaf("Alien (1979).mkv")
+        unrelated_current_leaf.set("current", "current")
+
+        outcome = scheduler._execute_due_schedule(
+            schedule, unrelated_current_leaf, datetime.now(PH_TZ)
+        )
+
+        self.assertEqual(outcome, "started")
+        vlc.play_item.assert_called_once_with("Alien (1979).mkv")
+        self.assertEqual(scheduler.scheduled, [])
 
     def test_restart_retries_interrupted_attempt_when_target_is_not_current(self):
         schedule = self.make_schedule(status="executing", attempt_count=1)
