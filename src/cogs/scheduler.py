@@ -102,7 +102,11 @@ class Scheduler(commands.Cog):
 
     def _rebind_due_schedules(self, now) -> dict:
         """Resolve schedules due within ten minutes and persist updated indexes."""
-        due = [s for s in self.scheduled if (s["dt"] - now).total_seconds() <= 600]
+        due = [
+            s for s in self.scheduled
+            if s.get("status") != "announcing"
+            and (s["dt"] - now).total_seconds() <= 600
+        ]
         if not due:
             return {}
 
