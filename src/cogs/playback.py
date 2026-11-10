@@ -13,6 +13,26 @@ from ..utils.command_utils import format_cmd_inline
 # Set up logger for this module
 logger = logging.getLogger(__name__)
 
+
+def _decide_playback_allow(
+    room_resolved: bool,
+    requester_in_room: bool,
+    requester_id: int,
+    owner_id: int | None,
+    owner_holds_current: bool,
+    owner_in_room: bool,
+) -> tuple[bool, str]:
+    """Pure decision rule for voice-room presence and per-track ownership."""
+    if not room_resolved:
+        return True, ""
+    if not requester_in_room:
+        return False, "not_in_room"
+    if owner_id is not None and owner_id != requester_id and owner_holds_current and owner_in_room:
+        return False, "hijack"
+    return True, ""
+
+
+
 class PlaybackCommands(commands.Cog):
     def __init__(self, bot, vlc_controller, tmdb_service, watch_service):
         self.bot = bot
@@ -44,6 +64,8 @@ class PlaybackCommands(commands.Cog):
         self.periodic_announce_task = None
         self.playback_started_event = asyncio.Event()
         self.last_queue_auto_play = 0  # Timestamp of last queue auto-play to prevent rapid triggers
+        self._playback_owner_id = None
+        self._playback_owner_item_id = None
         # Presence/update throttling for bot activity updates
         self._presence_last_set = 0.0
         self._presence_last_name = None  # Track last presence activity name to avoid throttling new titles
@@ -65,6 +87,96 @@ class PlaybackCommands(commands.Cog):
         # Track selected audio stream for consistent UI when VLC selection flags are missing
         self.selected_audio_stream_index = None
         self._initial_scan_pending = True # Guard for startup presence
+
+    def _resolve_room_channel(self, guild) -> discord.VoiceChannel | None:
+        """Resolve the configured voice room for playback presence checks."""
+        try:
+            channel_id = int(getattr(Config, "VOICE_JOIN_CHANNEL_ID", 0) or 0)
+            if channel_id <= 0:
+                return None
+            if guild is not None:
+                channel = guild.get_channel(channel_id)
+                if isinstance(channel, discord.VoiceChannel):
+                    return channel
+            channel = self.bot.get_channel(channel_id)
+            return channel if isinstance(channel, discord.VoiceChannel) else None
+        except Exception:
+            return None
+
+    def _current_stream_item_id(self) -> str | None:
+        """Return the VLC playlist ID currently playing, if any."""
+        try:
+            status = self.vlc.get_status()
+            if status is None:
+                return None
+            state_element = status.find("state")
+            state = state_element.text if state_element is not None else None
+            if state in (None, "stopped", "end"):
+                return None
+            playlist = self.vlc.get_playlist()
+            if playlist is None:
+                return None
+            for leaf in playlist.findall(".//leaf"):
+                if leaf.get("current"):
+                    return leaf.get("id")
+        except Exception:
+            return None
+        return None
+
+    def _playback_guard(self, member: discord.Member, presence_only: bool = False) -> tuple[bool, str]:
+        """Enforce voice-room presence and prevent hijacking an active user's track."""
+        if not bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
+            return True, ""
+        room = self._resolve_room_channel(member.guild)
+        if room is None and int(getattr(Config, "VOICE_JOIN_CHANNEL_ID", 0) or 0) > 0:
+            return False, (
+                "Playback control is unavailable: the configured voice room can't be found. "
+                "Ask the bot owner to check `VOICE_JOIN_CHANNEL_ID`."
+            )
+
+        voice = getattr(member, "voice", None)
+        requester_in_room = bool(
+            voice and voice.channel and room is not None and voice.channel.id == room.id
+        )
+        current_id = None if presence_only else self._current_stream_item_id()
+        owner_id = None if presence_only else self._playback_owner_id
+        owner = None
+        owner_in_room = False
+        if owner_id is not None and owner_id != member.id:
+            owner = member.guild.get_member(owner_id)
+            owner_voice = getattr(owner, "voice", None) if owner is not None else None
+            owner_in_room = bool(
+                owner_voice and owner_voice.channel and room is not None
+                and owner_voice.channel.id == room.id
+            )
+
+        allowed, reason = _decide_playback_allow(
+            room_resolved=room is not None,
+            requester_in_room=requester_in_room,
+            requester_id=member.id,
+            owner_id=owner_id,
+            owner_holds_current=bool(current_id and current_id == self._playback_owner_item_id),
+            owner_in_room=owner_in_room,
+        )
+        if allowed:
+            return True, ""
+        if reason == "not_in_room":
+            return False, f"You must be in **{room.name}** to control playback."
+        owner_name = getattr(owner, "display_name", "This user") if owner else "This user"
+        return False, f"⏳ **{owner_name}** is watching this one — ask before switching the playback."
+
+    async def _check_room(self, ctx) -> bool:
+        """Presence-only guard for controls that do not start a different item."""
+        allowed, reason = self._playback_guard(ctx.author, presence_only=True)
+        if not allowed:
+            await ctx.send(reason)
+        return allowed
+
+    def _seat_playback_owner(self, member: discord.Member, item_id: str | None) -> None:
+        """Associate the currently selected VLC item with the user who started it."""
+        if bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
+            self._playback_owner_id = member.id
+            self._playback_owner_item_id = item_id
 
     def _filename_from_uri(self, uri: str | None) -> str | None:
         """Extract a filename from VLC item URI/path for metadata fallback."""
@@ -715,6 +827,9 @@ class PlaybackCommands(commands.Cog):
                 )
                 embed.add_field(name="Aliases", value="spd, speed15, speednorm", inline=True)
                 await ctx.send(embed=embed)
+                return
+
+            if not await self._check_room(ctx):
                 return
 
             t = target.strip().lower()
@@ -1747,6 +1862,9 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def play(self, ctx):
         """Start or resume playback"""
+
+        if not await self._check_room(ctx):
+            return
         if not await self._check_cooldown(ctx):
             return
 
@@ -1802,6 +1920,9 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def stop(self, ctx):
         """Stop playback"""
+
+        if not await self._check_room(ctx):
+            return
         if self.vlc.stop():
             logger.info("Playback stopped")
             embed = discord.Embed(
@@ -1823,6 +1944,9 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def restart(self, ctx):
         """Restart current file from the beginning"""
+
+        if not await self._check_room(ctx):
+            return
         if self.vlc.seek("0"):
             logger.info("Restarted current file from beginning")
             await ctx.send('Restarted current file from the beginning')
@@ -1834,6 +1958,9 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def rewind(self, ctx, seconds: int = 10):
         """Rewind playback by specified number of seconds"""
+
+        if not await self._check_room(ctx):
+            return
         if seconds <= 0:
             embed = discord.Embed(
                 title="⏪ Rewind failed",
@@ -1862,6 +1989,9 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def forward(self, ctx, seconds: int = 10):
         """Fast forward playback by specified number of seconds"""
+
+        if not await self._check_room(ctx):
+            return
         if seconds <= 0:
             embed = discord.Embed(
                 title="⏩ Fast-forward failed",
@@ -1895,6 +2025,11 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send('Please provide a number greater than 0')
                 return
 
+        ok, reason = self._playback_guard(ctx.author)
+        if not ok:
+            await ctx.send(reason)
+            return
+
             playlist = self.vlc.get_playlist()
             if not playlist:
                 await ctx.send('Could not access VLC playlist')
@@ -1913,6 +2048,7 @@ class PlaybackCommands(commands.Cog):
             item_id = item.get('id')
 
             if self.vlc.play_item(item_id):
+                self._seat_playback_owner(ctx.author, item_id)
                 logger.info(f"Loading playlist item #{number}")
                 await ctx.send(f'Loading item #{number}...')
                 await asyncio.sleep(3)  # Give VLC time to load and start playing the file
@@ -1954,6 +2090,11 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
         
+        ok, reason = self._playback_guard(ctx.author)
+        if not ok:
+            await ctx.send(reason)
+            return
+
         # First check if there are any queued items to play
         next_queued = self.vlc.get_next_queued_item()
         if next_queued:
@@ -2027,6 +2168,11 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
             
+        ok, reason = self._playback_guard(ctx.author)
+        if not ok:
+            await ctx.send(reason)
+            return
+
         if self.vlc.previous():
             logger.info("Loading previous track")
             await ctx.send('Loading previous track...')
@@ -2398,6 +2544,11 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send('Please provide a number greater than 0')
                 return
 
+        ok, reason = self._playback_guard(ctx.author)
+        if not ok:
+            await ctx.send(reason)
+            return
+
             playlist = self.vlc.get_playlist()
             if not playlist:
                 await ctx.send('Could not access VLC playlist')
@@ -2522,6 +2673,9 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def clear_queue(self, ctx):
         """Clear all queue tracking (useful for reset)"""
+
+        if not await self._check_room(ctx):
+            return
         try:
             self.vlc.clear_queue_tracking()
             embed = discord.Embed(
@@ -2552,6 +2706,9 @@ class PlaybackCommands(commands.Cog):
 
         (Commands are shown with the configured prefix in the help output.)
         """
+
+        if not await self._check_room(ctx):
+            return
         try:
             if ref.startswith('#'):
                 num = int(ref[1:])
@@ -2581,6 +2738,9 @@ class PlaybackCommands(commands.Cog):
     @commands.command(name='shuffle_on', aliases=['shuffle_enable'])
     async def shuffle_on(self, ctx):
         """Enable shuffle mode"""
+
+        if not await self._check_room(ctx):
+            return
         try:
             current_shuffle = self.vlc.get_shuffle_state()
             
@@ -2610,6 +2770,9 @@ class PlaybackCommands(commands.Cog):
     @commands.command(name='shuffle_off', aliases=['shuffle_disable'])
     async def shuffle_off(self, ctx):
         """Disable shuffle mode"""
+
+        if not await self._check_room(ctx):
+            return
         try:
             current_shuffle = self.vlc.get_shuffle_state()
             
@@ -2639,6 +2802,9 @@ class PlaybackCommands(commands.Cog):
     @commands.command(name='shuffle_toggle', aliases=['shuffle'])
     async def shuffle_toggle(self, ctx):
         """Toggle shuffle mode on/off"""
+
+        if not await self._check_room(ctx):
+            return
         try:
             current_shuffle = self.vlc.get_shuffle_state()
             
