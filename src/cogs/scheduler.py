@@ -274,11 +274,34 @@ class Scheduler(commands.Cog):
                 and leaf.get("current") is not None
             ):
                 self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
-                self._save_schedule_backup()
+                if not self._save_schedule_backup():
+                    self.scheduled.append(schedule)
+                    return "confirming"
                 logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))
                 return "recovered"
-            # The target is not currently playing, so it is safe to retry the
-            # persisted in-flight attempt.
+
+            # VLC's HTTP command response does not confirm that pl_play actually
+            # changed the current item. Allow a short transition window before
+            # retrying an in-flight command, including when playlist reads fail.
+            started_at = schedule.get("execution_started_at")
+            if started_at:
+                if isinstance(started_at, str):
+                    started_at = datetime.fromisoformat(started_at)
+                elapsed = (now - started_at).total_seconds()
+                if elapsed < 90:
+                    return "confirming"
+
+                attempts = max(1, int(schedule.get("attempt_count", 1)))
+                delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+                schedule["status"] = "pending"
+                schedule.pop("execution_started_at", None)
+                schedule["last_error"] = "VLC did not confirm the scheduled item became current"
+                schedule["next_attempt_at"] = now.timestamp() + delay
+                self._save_schedule_backup()
+                return "retry"
+
+            # Older persisted claims may not have an execution timestamp. They
+            # cannot use the confirmation window, so retry them immediately.
             schedule["status"] = "pending"
             schedule.pop("execution_started_at", None)
 
@@ -321,22 +344,49 @@ class Scheduler(commands.Cog):
             error = "VLC rejected the playback command"
 
         if not succeeded:
-            # The attempt count was already persisted with the execution claim.
-            attempts = int(schedule.get("attempt_count", 1))
-            delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
-            schedule["status"] = "pending"
-            schedule.pop("execution_started_at", None)
+            # A timeout or dropped HTTP connection is ambiguous: VLC may have
+            # executed the command before the response was lost. Keep the
+            # execution claim and confirm the current item before retrying.
             schedule["last_error"] = str(error)
-            schedule["next_attempt_at"] = now.timestamp() + delay
             self._save_schedule_backup()
             logger.warning(
-                "Scheduled movie '%s' failed to start; retrying in %ss: %s",
-                schedule.get("title", "Unknown"), delay, error,
+                "Scheduled movie '%s' has an unconfirmed VLC command; "
+                "retaining its execution claim: %s",
+                schedule.get("title", "Unknown"), error,
             )
-            return "retry"
+            return "confirming"
+
+        # A successful HTTP/XML response only means VLC answered the request.
+        # Confirm that the requested playlist item is now current before
+        # consuming the durable schedule.
+        try:
+            playlist = self.vlc.get_playlist()
+            current_item = next(
+                (
+                    entry for entry in playlist.findall(".//leaf")
+                    if entry.get("current") is not None
+                ),
+                None,
+            ) if playlist is not None else None
+            confirmed = (
+                current_item is not None
+                and str(current_item.get("id")) == str(item_id)
+            )
+        except Exception as exc:
+            logger.warning("Could not confirm scheduled VLC playback: %s", exc)
+            confirmed = False
+
+        if not confirmed:
+            logger.info(
+                "VLC accepted the play request for '%s', awaiting current-item confirmation",
+                schedule.get("title", "Unknown"),
+            )
+            return "confirming"
 
         self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
-        self._save_schedule_backup()
+        if not self._save_schedule_backup():
+            self.scheduled.append(schedule)
+            return "confirming"
         return "started"
 
     async def _announce_schedule_started(self, schedule):
