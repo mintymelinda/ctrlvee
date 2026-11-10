@@ -141,6 +141,44 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(backup_path)
 
+    def test_rebind_updates_schedule_and_persists_new_playlist_identity(self):
+        schedule = self.make_schedule(number=1)
+        original = leaf("Heat (1995).mkv")
+        shifted = leaf("Alien (1979).mkv")
+        playlist = ET.Element("playlist")
+        playlist.extend([shifted, original])
+        vlc = Mock()
+        vlc.get_playlist.return_value = playlist
+        scheduler = self.make_scheduler(schedule, vlc)
+        scheduler._uri_exists = Mock(return_value=True)
+        scheduler._save_schedule_backup.return_value = True
+
+        resolved = scheduler._rebind_due_schedules(datetime.now(PH_TZ))
+
+        self.assertEqual(schedule["number"], 2)
+        self.assertEqual(schedule["uri"], original.get("uri"))
+        self.assertEqual(resolved[id(schedule)], (1, original))
+        scheduler._save_schedule_backup.assert_called_once_with()
+
+    def test_rebind_backup_failure_restores_state_and_defers_schedule(self):
+        schedule = self.make_schedule(number=1)
+        original = leaf("Heat (1995).mkv")
+        shifted = leaf("Alien (1979).mkv")
+        playlist = ET.Element("playlist")
+        playlist.extend([shifted, original])
+        vlc = Mock()
+        vlc.get_playlist.return_value = playlist
+        scheduler = self.make_scheduler(schedule, vlc)
+        scheduler._uri_exists = Mock(return_value=True)
+        scheduler._save_schedule_backup.return_value = False
+        previous = schedule.copy()
+
+        resolved = scheduler._rebind_due_schedules(datetime.now(PH_TZ))
+
+        self.assertEqual(schedule, previous)
+        self.assertNotIn(id(schedule), resolved)
+        scheduler._save_schedule_backup.assert_called_once_with()
+
     def test_successful_playback_is_removed_only_after_current_item_is_confirmed(self):
         schedule = self.make_schedule()
         vlc = Mock()

@@ -114,6 +114,8 @@ class Scheduler(commands.Cog):
         items = playlist.findall(".//leaf") if playlist is not None else []
         resolved = {}
         changed = False
+        previous_states = {}
+        changed_schedules = set()
         for schedule in due:
             index = _resolve_schedule_index(schedule, items, self._uri_exists)
             resolved[id(schedule)] = (index, items[index] if index is not None else None)
@@ -127,12 +129,25 @@ class Scheduler(commands.Cog):
                     "Rebinding schedule '%s' #%s -> #%s (%s)",
                     schedule.get("title"), schedule["number"], index + 1, leaf.get("name"),
                 )
+                previous_states[id(schedule)] = (schedule, schedule.copy())
+                changed_schedules.add(id(schedule))
                 schedule["number"] = index + 1
                 schedule["uri"] = leaf.get("uri") or schedule.get("uri")
                 changed = True
 
-        if changed:
-            self._save_schedule_backup()
+        if changed and not self._save_schedule_backup():
+            # Do not execute using a rebind that was not durably recorded.
+            # Restore every changed entry and defer those entries until the
+            # next scheduler pass can persist the updated playlist identity.
+            for schedule, previous in previous_states.values():
+                schedule.clear()
+                schedule.update(previous)
+            for schedule_id in changed_schedules:
+                resolved.pop(schedule_id, None)
+            logger.error(
+                "Could not persist scheduled playlist rebindings; restored "
+                "their previous state and deferred execution"
+            )
         return resolved
 
     def _load_schedule_backup(self):
