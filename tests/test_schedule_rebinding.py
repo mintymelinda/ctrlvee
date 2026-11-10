@@ -5,7 +5,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.cogs.scheduler import PH_TZ, Scheduler, _resolve_schedule_index
 
@@ -64,7 +64,7 @@ class ScheduleRebindingTests(unittest.TestCase):
 
 
 
-class ScheduledPlaybackLifecycleTests(unittest.TestCase):
+class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def make_scheduler(self, schedule, vlc):
         scheduler = Scheduler.__new__(Scheduler)
         scheduler.bot = Mock()
@@ -292,6 +292,39 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         finally:
             os.unlink(backup_path)
 
+
+    async def test_unschedule_waits_for_scheduler_lock_and_removes_atomically(self):
+        schedule = self.make_schedule()
+        scheduler = self.make_scheduler(schedule, Mock())
+        ctx = Mock()
+        ctx.send = AsyncMock()
+        await scheduler._schedule_lock.acquire()
+        try:
+            task = asyncio.create_task(
+                Scheduler.unschedule.callback(scheduler, ctx, 1)
+            )
+            await asyncio.sleep(0)
+            self.assertFalse(task.done())
+            self.assertEqual(scheduler.scheduled, [schedule])
+        finally:
+            scheduler._schedule_lock.release()
+        await task
+        self.assertEqual(scheduler.scheduled, [])
+        ctx.send.assert_awaited_once_with("Removed all schedules for movie #1.")
+
+    async def test_unschedule_restores_schedule_when_backup_save_fails(self):
+        schedule = self.make_schedule()
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler._save_schedule_backup.return_value = False
+        ctx = Mock()
+        ctx.send = AsyncMock()
+
+        await Scheduler.unschedule.callback(scheduler, ctx, 1)
+
+        self.assertEqual(scheduler.scheduled, [schedule])
+        ctx.send.assert_awaited_once_with(
+            "❌ Could not save the schedule changes. No schedules were removed."
+        )
 
     def test_backup_load_skips_bad_entry_without_discarding_valid_schedules(self):
         valid = {

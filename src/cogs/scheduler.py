@@ -241,11 +241,6 @@ class Scheduler(commands.Cog):
             if dt <= now:
                 await ctx.send("❌ Scheduled time must be in the future (PH time).")
                 return
-            # Check for double scheduling (same movie, same time within 1 minute)
-            for s in self.scheduled:
-                if s["number"] == number and abs((s["dt"] - dt).total_seconds()) < 60:
-                    await ctx.send(f"❌ Movie #{number} is already scheduled at {s['dt'].strftime('%Y-%m-%d %H:%M %Z')}. Double scheduling is not allowed.")
-                    return
             # Get movie title and duration from playlist (on demand)
             playlist = self.vlc.get_playlist()
             items = playlist.findall('.//leaf') if playlist is not None else []
@@ -268,8 +263,34 @@ class Scheduler(commands.Cog):
                 "status": "pending",
                 "attempt_count": 0
             }
-            self.scheduled.append(entry)
-            self._save_schedule_backup()
+            duplicate = None
+            save_failed = False
+            async with self._schedule_lock:
+                duplicate = next(
+                    (
+                        scheduled for scheduled in self.scheduled
+                        if scheduled["number"] == number
+                        and abs((scheduled["dt"] - dt).total_seconds()) < 60
+                    ),
+                    None,
+                )
+                if duplicate is None:
+                    self.scheduled.append(entry)
+                    if not self._save_schedule_backup():
+                        self.scheduled.remove(entry)
+                        save_failed = True
+
+            if duplicate is not None:
+                await ctx.send(
+                    f"❌ Movie #{number} is already scheduled at "
+                    f"{duplicate['dt'].strftime('%Y-%m-%d %H:%M %Z')}. "
+                    "Double scheduling is not allowed."
+                )
+                return
+            if save_failed:
+                await ctx.send("❌ Could not save the schedule. No schedule was added.")
+                return
+
             if duration == 'Loading...':
                 dur_str = 'Loading...'
             elif duration:
@@ -291,11 +312,13 @@ class Scheduler(commands.Cog):
     @commands.command(name="schedules")
     async def list_schedules(self, ctx):
         """List all upcoming scheduled movies."""
-        if not self.scheduled:
+        async with self._schedule_lock:
+            schedules = list(self.scheduled)
+        if not schedules:
             await ctx.send("No movies scheduled.")
             return
         embed = discord.Embed(title="Upcoming Scheduled Movies", color=discord.Color.purple())
-        for s in sorted(self.scheduled, key=lambda x: x["dt"]):
+        for s in sorted(schedules, key=lambda x: x["dt"]):
             dt_str = s["dt"].strftime('%Y-%m-%d %H:%M %Z') if isinstance(s["dt"], datetime) else str(s["dt"])
             duration = s.get("duration")
             if duration == 'Loading...' or duration == 0:
@@ -314,11 +337,22 @@ class Scheduler(commands.Cog):
     @commands.command(name="unschedule")
     async def unschedule(self, ctx, number: int):
         """Remove all schedules for a given movie number."""
-        before = len(self.scheduled)
-        self.scheduled = [s for s in self.scheduled if s["number"] != number]
-        self._save_schedule_backup()
-        after = len(self.scheduled)
-        if before == after:
+        save_failed = False
+        async with self._schedule_lock:
+            previous = self.scheduled
+            updated = [s for s in previous if s["number"] != number]
+            if len(updated) == len(previous):
+                removed = False
+            else:
+                self.scheduled = updated
+                removed = True
+                if not self._save_schedule_backup():
+                    self.scheduled = previous
+                    save_failed = True
+
+        if save_failed:
+            await ctx.send("❌ Could not save the schedule changes. No schedules were removed.")
+        elif not removed:
             await ctx.send(f"No schedules found for movie #{number}.")
         else:
             await ctx.send(f"Removed all schedules for movie #{number}.")
