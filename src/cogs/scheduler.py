@@ -7,6 +7,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import logging
 import json
 import os
+import re
+from urllib.parse import unquote
+from ..config import Config
 from ..utils.media_utils import MediaUtils
 
 # Cross-platform timezone handling for PH time
@@ -24,6 +27,34 @@ def get_ph_timezone():
 
 PH_TZ = get_ph_timezone()
 logger = logging.getLogger(__name__)
+
+
+def _title_key(name: str):
+    """Return a normalized movie title/year key for matching upgraded files."""
+    title, year = MediaUtils.parse_movie_filename(unquote(name or ""))
+    normalized = re.sub(r"\W+", " ", (title or "").lower()).strip()
+    return (normalized, year) if normalized else None
+
+
+def _resolve_schedule_index(entry: dict, items: list, exists=lambda uri: True):
+    """Resolve a saved schedule to its current playlist index."""
+    uri = entry.get("uri")
+    if not uri:
+        index = entry["number"] - 1
+        return index if 0 <= index < len(items) else None
+
+    exact = next((i for i, leaf in enumerate(items) if leaf.get("uri") == uri), None)
+    if exact is not None and exists(uri):
+        return exact
+
+    wanted = _title_key(uri.rsplit("/", 1)[-1])
+    matches = [
+        i for i, leaf in enumerate(items)
+        if wanted and i != exact
+        and _title_key(leaf.get("name", "")) == wanted
+        and exists(leaf.get("uri"))
+    ]
+    return matches[-1] if matches else exact
 
 
 SCHEDULE_BACKUP_FILE = "schedule_backup.json"
@@ -57,6 +88,41 @@ class Scheduler(commands.Cog):
                 json.dump(self.scheduled, f, default=str)
         except Exception as e:
             logger.error(f"Error saving schedule backup: {e}")
+
+    def _uri_exists(self, uri) -> bool:
+        path = self.vlc._uri_to_path(uri)
+        return bool(path) and self.vlc._file_exists_robust(path)
+
+    def _rebind_due_schedules(self, now) -> dict:
+        """Resolve schedules due within ten minutes and persist updated indexes."""
+        due = [s for s in self.scheduled if (s["dt"] - now).total_seconds() <= 600]
+        if not due:
+            return {}
+
+        playlist = self.vlc.get_playlist()
+        items = playlist.findall(".//leaf") if playlist is not None else []
+        resolved = {}
+        changed = False
+        for schedule in due:
+            index = _resolve_schedule_index(schedule, items, self._uri_exists)
+            resolved[id(schedule)] = (index, items[index] if index is not None else None)
+            if index is None:
+                continue
+            leaf = items[index]
+            if schedule["number"] != index + 1 or (
+                schedule.get("uri") and schedule["uri"] != leaf.get("uri")
+            ):
+                logger.info(
+                    "Rebinding schedule '%s' #%s -> #%s (%s)",
+                    schedule.get("title"), schedule["number"], index + 1, leaf.get("name"),
+                )
+                schedule["number"] = index + 1
+                schedule["uri"] = leaf.get("uri") or schedule.get("uri")
+                changed = True
+
+        if changed:
+            self._save_schedule_backup()
+        return resolved
 
     def _load_schedule_backup(self):
         if os.path.exists(SCHEDULE_BACKUP_FILE):
@@ -169,6 +235,11 @@ class Scheduler(commands.Cog):
     async def check_schedules(self):
         from src.config import Config
         now = datetime.now(PH_TZ)
+        try:
+            resolved = self._rebind_due_schedules(now)
+        except Exception as e:
+            logger.error(f"Error resolving scheduled items: {e}")
+            resolved = {}
         # Pre-announce 10 minutes before
         # Safeguard: ensure pre_announce_sent always exists
         if not hasattr(self, 'pre_announce_sent') or self.pre_announce_sent is None:
@@ -205,12 +276,10 @@ class Scheduler(commands.Cog):
         to_run = [s for s in self.scheduled if s["dt"] <= now]
         for s in to_run:
             try:
-                # Play by number (1-based index)
-                playlist = self.vlc.get_playlist()
-                items = playlist.findall('.//leaf') if playlist is not None else []
-                idx = s["number"] - 1
-                if 0 <= idx < len(items):
-                    item_id = items[idx].get('id')
+                # Resolve saved file identity rather than trusting a stale playlist number.
+                idx, leaf = resolved.get(id(s), (None, None))
+                if leaf is not None:
+                    item_id = leaf.get('id')
                     self.vlc.play_item(item_id)
                     announce_ids = Config.get_announce_channel_ids()
                     channel_ids = set(announce_ids or [])
@@ -262,7 +331,7 @@ class Scheduler(commands.Cog):
                                     except Exception:
                                         pass
                 else:
-                    logger.warning(f"Scheduled movie number {s['number']} not found in playlist.")
+                    logger.warning(f"Scheduled movie #{s['number']} ({s.get('title')}) not found in playlist; no replacement match.")
             except Exception as e:
                 logger.error(f"Error running scheduled movie: {e}")
         # Remove all that have run
