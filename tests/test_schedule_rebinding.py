@@ -247,6 +247,57 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(schedule["next_attempt_at"], now.timestamp())
         vlc.play_item.assert_not_called()
 
+    def test_retry_backup_failure_restores_previous_schedule_state(self):
+        schedule = self.make_schedule(
+            status="executing",
+            attempt_count=2,
+            target_item_id="Heat (1995).mkv",
+            execution_started_at=datetime.now(PH_TZ).isoformat(),
+        )
+        previous = schedule.copy()
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler._save_schedule_backup.return_value = False
+
+        result = scheduler._retry_schedule(
+            schedule, datetime.now(PH_TZ), "temporary VLC failure"
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(schedule, previous)
+
+    def test_execution_timeout_backup_failure_keeps_execution_claim(self):
+        started = datetime.now(PH_TZ) - timedelta(seconds=120)
+        schedule = self.make_schedule(
+            status="executing",
+            attempt_count=2,
+            target_item_id="Heat (1995).mkv",
+            execution_started_at=started.isoformat(),
+        )
+        previous = schedule.copy()
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler._save_schedule_backup.return_value = False
+
+        result = scheduler._execute_due_schedule(
+            schedule, None, datetime.now(PH_TZ)
+        )
+
+        self.assertEqual(result, "confirming")
+        self.assertEqual(schedule, previous)
+
+    def test_execution_claim_backup_failure_restores_attempt_state(self):
+        schedule = self.make_schedule()
+        previous = schedule.copy()
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler._save_schedule_backup.return_value = False
+
+        result = scheduler._execute_due_schedule(
+            schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ)
+        )
+
+        self.assertEqual(result, "retry")
+        self.assertEqual(schedule, previous)
+        scheduler.vlc.play_item.assert_not_called()
+
     def test_completion_backup_failure_keeps_schedule_in_memory(self):
         schedule = self.make_schedule()
         vlc = Mock()

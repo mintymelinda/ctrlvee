@@ -384,6 +384,7 @@ class Scheduler(commands.Cog):
 
     def _retry_schedule(self, schedule, now, reason):
         """Persist a bounded exponential retry without discarding the due job."""
+        previous = schedule.copy()
         attempts = int(schedule.get("attempt_count", 0)) + 1
         delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
         schedule["attempt_count"] = attempts
@@ -391,11 +392,20 @@ class Scheduler(commands.Cog):
         schedule.pop("execution_started_at", None)
         schedule["last_error"] = str(reason)
         schedule["next_attempt_at"] = now.timestamp() + delay
+        if not self._save_schedule_backup():
+            schedule.clear()
+            schedule.update(previous)
+            logger.error(
+                "Could not persist retry state for scheduled movie '%s'; "
+                "restored its last persisted state",
+                schedule.get("title", "Unknown"),
+            )
+            return False
         logger.warning(
             "Scheduled movie '%s' attempt %s failed; retrying in %ss: %s",
             schedule.get("title", "Unknown"), attempts, delay, reason,
         )
-        self._save_schedule_backup()
+        return True
 
     def _execute_due_schedule(self, schedule, leaf, now):
         """Execute one due schedule with a durable claim and restart reconciliation."""
@@ -434,13 +444,22 @@ class Scheduler(commands.Cog):
                 if elapsed < 90:
                     return "confirming"
 
+                previous = schedule.copy()
                 attempts = max(1, int(schedule.get("attempt_count", 1)))
                 delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
                 schedule["status"] = "pending"
                 schedule.pop("execution_started_at", None)
                 schedule["last_error"] = "VLC did not confirm the scheduled item became current"
                 schedule["next_attempt_at"] = now.timestamp() + delay
-                self._save_schedule_backup()
+                if not self._save_schedule_backup():
+                    schedule.clear()
+                    schedule.update(previous)
+                    logger.error(
+                        "Could not persist retry state for scheduled movie '%s'; "
+                        "keeping its execution claim",
+                        schedule.get("title", "Unknown"),
+                    )
+                    return "confirming"
                 return "retry"
 
             # Older persisted claims may not have an execution timestamp. They
@@ -463,16 +482,17 @@ class Scheduler(commands.Cog):
 
         # Persist the claim before calling VLC so overlapping loop invocations
         # and a restarted process can identify an interrupted attempt.
+        previous = schedule.copy()
         schedule["status"] = "executing"
         schedule["execution_started_at"] = now.isoformat()
         schedule["attempt_count"] = int(schedule.get("attempt_count", 0)) + 1
         schedule["target_item_id"] = str(item_id)
         if not self._save_schedule_backup():
-            schedule["status"] = "pending"
-            schedule.pop("execution_started_at", None)
+            schedule.clear()
+            schedule.update(previous)
             logger.error(
                 "Not starting scheduled movie '%s' because its execution claim "
-                "could not be persisted",
+                "could not be persisted; restored its previous state",
                 schedule.get("title", "Unknown"),
             )
             return "retry"
