@@ -2025,10 +2025,10 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send('Please provide a number greater than 0')
                 return
 
-        ok, reason = self._playback_guard(ctx.author)
-        if not ok:
-            await ctx.send(reason)
-            return
+            ok, reason = self._playback_guard(ctx.author)
+            if not ok:
+                await ctx.send(reason)
+                return
 
             playlist = self.vlc.get_playlist()
             if not playlist:
