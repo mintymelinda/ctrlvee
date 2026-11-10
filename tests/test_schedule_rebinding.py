@@ -89,6 +89,58 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         schedule.update(updates)
         return schedule
 
+    @patch("src.config.Config.get_announce_channel_ids", return_value=[101, 202])
+    async def test_pre_announce_retries_failed_channel_without_resending_successful_channel(self, _):
+        schedule = self.make_schedule(channel=None, dt=datetime.now(PH_TZ) + timedelta(minutes=5))
+        scheduler = self.make_scheduler(schedule, Mock())
+        first = Mock()
+        first.send = AsyncMock()
+        second = Mock()
+        second.send = AsyncMock(side_effect=[RuntimeError("temporary Discord failure"), None])
+        scheduler.bot.get_channel.side_effect = lambda channel_id: {101: first, 202: second}.get(channel_id)
+        scheduler._save_schedule_backup.return_value = True
+
+        await scheduler._pre_announce_schedule(schedule)
+        self.assertEqual(first.send.await_count, 1)
+        self.assertEqual(second.send.await_count, 1)
+        self.assertEqual(schedule["pre_announce_sent_channels"], [101])
+        self.assertEqual(scheduler.pre_announce_sent, set())
+
+        await scheduler._pre_announce_schedule(schedule)
+        self.assertEqual(first.send.await_count, 1)
+        self.assertEqual(second.send.await_count, 2)
+        self.assertEqual(schedule["pre_announce_sent_channels"], [101, 202])
+        self.assertEqual(scheduler.pre_announce_sent, {(1, schedule["dt"])})
+
+    @patch("src.config.Config.get_announce_channel_ids", return_value=[101])
+    async def test_pre_announce_delivery_is_persisted_for_restart(self, _):
+        schedule = self.make_schedule(channel=None)
+        schedule["pre_announce_sent_channels"] = [101]
+        scheduler = self.make_scheduler(schedule, Mock())
+        channel = Mock()
+        channel.send = AsyncMock()
+        scheduler.bot.get_channel.return_value = channel
+        await scheduler._pre_announce_schedule(schedule)
+        channel.send.assert_not_awaited()
+        self.assertIn((1, schedule["dt"]), scheduler.pre_announce_sent)
+
+    def test_backup_load_normalizes_pre_announce_channel_state(self):
+        schedule = {
+            "number": 1,
+            "title": "Heat",
+            "dt": datetime.now(PH_TZ).isoformat(),
+            "pre_announce_sent_channels": [101, "202", True, 303],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as backup:
+            json.dump([schedule], backup)
+            backup_path = backup.name
+        try:
+            with patch("src.cogs.scheduler.SCHEDULE_BACKUP_FILE", backup_path):
+                loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
+            self.assertEqual(loaded[0]["pre_announce_sent_channels"], [101, 303])
+        finally:
+            os.unlink(backup_path)
+
     def test_successful_playback_is_removed_only_after_current_item_is_confirmed(self):
         schedule = self.make_schedule()
         vlc = Mock()
