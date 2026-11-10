@@ -245,6 +245,11 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         schedule = self.make_schedule(status="executing", attempt_count=1)
         vlc = Mock()
         vlc.play_item.return_value = object()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
         outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
