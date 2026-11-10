@@ -289,5 +289,73 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
             os.unlink(backup_path)
 
 
+    def test_backup_load_skips_bad_entry_without_discarding_valid_schedules(self):
+        valid = {
+            "number": 1,
+            "title": "Heat",
+            "dt": datetime.now(PH_TZ).isoformat(),
+        }
+        invalid = {"number": 2, "title": "Alien", "dt": "not-a-date"}
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as backup:
+            json.dump([valid, invalid], backup)
+            backup_path = backup.name
+        try:
+            with patch("src.cogs.scheduler.SCHEDULE_BACKUP_FILE", backup_path):
+                loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["title"], "Heat")
+        finally:
+            os.unlink(backup_path)
+
+    def test_backup_load_normalizes_naive_schedule_and_retry_timestamps(self):
+        naive_dt = datetime(2026, 11, 10, 12, 0, 0)
+        naive_retry = datetime(2026, 11, 10, 12, 5, 0)
+        naive_started = datetime(2026, 11, 10, 12, 1, 0)
+        schedule = {
+            "number": 1,
+            "title": "Heat",
+            "dt": naive_dt.isoformat(),
+            "next_attempt_at": naive_retry.isoformat(),
+            "execution_started_at": naive_started.isoformat(),
+            "status": "executing",
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as backup:
+            json.dump([schedule], backup)
+            backup_path = backup.name
+        try:
+            with patch("src.cogs.scheduler.SCHEDULE_BACKUP_FILE", backup_path):
+                loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
+            self.assertEqual(loaded[0]["dt"].tzinfo, PH_TZ)
+            self.assertEqual(loaded[0]["next_attempt_at"].tzinfo, PH_TZ)
+            restored_started = datetime.fromisoformat(loaded[0]["execution_started_at"])
+            self.assertEqual(
+                restored_started.utcoffset(),
+                PH_TZ.utcoffset(naive_started),
+            )
+        finally:
+            os.unlink(backup_path)
+
+    def test_backup_load_preserves_ambiguous_execution_claim_with_fresh_confirmation_window(self):
+        schedule = {
+            "number": 1,
+            "title": "Heat",
+            "dt": datetime.now(PH_TZ).isoformat(),
+            "status": "executing",
+            "execution_started_at": "not-a-timestamp",
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as backup:
+            json.dump([schedule], backup)
+            backup_path = backup.name
+        try:
+            before = datetime.now(PH_TZ)
+            with patch("src.cogs.scheduler.SCHEDULE_BACKUP_FILE", backup_path):
+                loaded = Scheduler.__new__(Scheduler)._load_schedule_backup()
+            started = datetime.fromisoformat(loaded[0]["execution_started_at"])
+            self.assertEqual(loaded[0]["status"], "executing")
+            self.assertGreaterEqual(started, before)
+        finally:
+            os.unlink(backup_path)
+
+
 if __name__ == "__main__":
     unittest.main()
