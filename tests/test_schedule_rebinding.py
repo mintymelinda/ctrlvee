@@ -73,6 +73,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler.scheduled = [schedule]
         scheduler.pre_announce_sent = set()
         scheduler._schedule_lock = asyncio.Lock()
+        scheduler._schedule_locks = {}
         scheduler._save_schedule_backup = Mock()
         return scheduler
 
@@ -472,6 +473,70 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(backup_path)
 
+
+    @patch("src.config.Config.get_announce_channel_ids", return_value=[101])
+    async def test_reminder_send_does_not_hold_global_schedule_lock(self, _):
+        schedule = self.make_schedule(channel=None, dt=datetime.now(PH_TZ) + timedelta(minutes=5))
+        scheduler = self.make_scheduler(schedule, Mock())
+        channel = Mock()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_send(message):
+            entered.set()
+            await release.wait()
+
+        channel.send = AsyncMock(side_effect=blocked_send)
+        scheduler.bot.get_channel.return_value = channel
+        scheduler._save_schedule_backup.return_value = True
+
+        operation = asyncio.create_task(scheduler._pre_announce_schedule(schedule))
+        await entered.wait()
+        acquired = False
+        try:
+            await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
+            acquired = True
+        finally:
+            if acquired:
+                scheduler._schedule_lock.release()
+            release.set()
+        await operation
+
+    @patch("src.config.Config.get_announce_channel_ids", return_value=[101])
+    async def test_unschedule_waits_for_inflight_announcement_before_removing(self, _):
+        schedule = self.make_schedule(channel=None, status="announcing")
+        scheduler = self.make_scheduler(schedule, Mock())
+        scheduler._schedule_locks = {}
+        scheduler.tmdb.get_movie_metadata.return_value = None
+        channel = Mock()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def blocked_send(message):
+            entered.set()
+            await release.wait()
+
+        channel.send = AsyncMock(side_effect=blocked_send)
+        scheduler.bot.get_channel.return_value = channel
+        scheduler._save_schedule_backup.return_value = True
+        operation_lock = scheduler._get_schedule_lock(schedule)
+
+        async def announce():
+            async with operation_lock:
+                await scheduler._announce_schedule_started(schedule)
+
+        announcement = asyncio.create_task(announce())
+        await entered.wait()
+        ctx = Mock()
+        ctx.send = AsyncMock()
+        removal = asyncio.create_task(Scheduler.unschedule.callback(scheduler, ctx, 1))
+        await asyncio.sleep(0)
+        self.assertFalse(removal.done())
+        release.set()
+        await announcement
+        await removal
+        self.assertEqual(scheduler.scheduled, [])
+        ctx.send.assert_awaited_once_with("No schedules found for movie #1.")
 
     async def test_unschedule_waits_for_scheduler_lock_and_removes_atomically(self):
         schedule = self.make_schedule()
