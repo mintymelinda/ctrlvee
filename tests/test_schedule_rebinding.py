@@ -89,10 +89,15 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         schedule.update(updates)
         return schedule
 
-    def test_successful_playback_is_removed_only_after_vlc_accepts(self):
+    def test_successful_playback_is_removed_only_after_current_item_is_confirmed(self):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = object()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
         outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
@@ -102,6 +107,57 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
         self.assertEqual(schedule["status"], "executing")
         self.assertEqual(vlc.play_item.call_count, 1)
         self.assertEqual(scheduler._save_schedule_backup.call_count, 2)
+
+    def test_xml_response_without_current_item_confirmation_retains_schedule(self):
+        schedule = self.make_schedule()
+        vlc = Mock()
+        vlc.play_item.return_value = ET.Element("root")
+        vlc.get_playlist.return_value = ET.Element("playlist")
+        scheduler = self.make_scheduler(schedule, vlc)
+
+        outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+
+        self.assertEqual(outcome, "confirming")
+        self.assertEqual(scheduler.scheduled, [schedule])
+        self.assertEqual(schedule["status"], "executing")
+        self.assertEqual(schedule["target_item_id"], "Heat (1995).mkv")
+        self.assertEqual(vlc.play_item.call_count, 1)
+
+    def test_unconfirmed_execution_waits_before_retrying(self):
+        started = datetime.now(PH_TZ) - timedelta(seconds=30)
+        schedule = self.make_schedule(
+            status="executing",
+            attempt_count=1,
+            target_item_id="Heat (1995).mkv",
+            execution_started_at=started.isoformat(),
+        )
+        vlc = Mock()
+        scheduler = self.make_scheduler(schedule, vlc)
+
+        outcome = scheduler._execute_due_schedule(schedule, None, datetime.now(PH_TZ))
+
+        self.assertEqual(outcome, "confirming")
+        vlc.play_item.assert_not_called()
+        self.assertEqual(scheduler.scheduled, [schedule])
+
+    def test_unconfirmed_execution_enters_backoff_after_confirmation_window(self):
+        started = datetime.now(PH_TZ) - timedelta(seconds=120)
+        schedule = self.make_schedule(
+            status="executing",
+            attempt_count=2,
+            target_item_id="Heat (1995).mkv",
+            execution_started_at=started.isoformat(),
+        )
+        vlc = Mock()
+        scheduler = self.make_scheduler(schedule, vlc)
+        now = datetime.now(PH_TZ)
+
+        outcome = scheduler._execute_due_schedule(schedule, None, now)
+
+        self.assertEqual(outcome, "retry")
+        self.assertEqual(schedule["status"], "pending")
+        self.assertGreater(schedule["next_attempt_at"], now.timestamp())
+        vlc.play_item.assert_not_called()
 
     def test_failed_playback_retains_job_and_schedules_retry(self):
         schedule = self.make_schedule()
