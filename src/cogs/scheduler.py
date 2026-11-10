@@ -79,11 +79,22 @@ class Scheduler(commands.Cog):
         self._save_schedule_backup()
 
     def _save_schedule_backup(self):
+        temporary_file = f"{SCHEDULE_BACKUP_FILE}.tmp"
         try:
-            with open(SCHEDULE_BACKUP_FILE, "w") as f:
+            with open(temporary_file, "w") as f:
                 json.dump(self.scheduled, f, default=str)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary_file, SCHEDULE_BACKUP_FILE)
+            return True
         except Exception as e:
             logger.error(f"Error saving schedule backup: {e}")
+            try:
+                if os.path.exists(temporary_file):
+                    os.unlink(temporary_file)
+            except OSError:
+                pass
+            return False
 
     def _uri_exists(self, uri) -> bool:
         path = self.vlc._uri_to_path(uri)
@@ -284,7 +295,15 @@ class Scheduler(commands.Cog):
         schedule["execution_started_at"] = now.isoformat()
         schedule["attempt_count"] = int(schedule.get("attempt_count", 0)) + 1
         schedule["target_item_id"] = str(item_id)
-        self._save_schedule_backup()
+        if not self._save_schedule_backup():
+            schedule["status"] = "pending"
+            schedule.pop("execution_started_at", None)
+            logger.error(
+                "Not starting scheduled movie '%s' because its execution claim "
+                "could not be persisted",
+                schedule.get("title", "Unknown"),
+            )
+            return "retry"
 
         try:
             result = self.vlc.play_item(item_id)
@@ -341,7 +360,7 @@ class Scheduler(commands.Cog):
 
         title = schedule.get("title")
         year = None
-        match = re.search(r"\\((\\d{4})\\)$", title or "")
+        match = re.search(r"\((\d{4})\)$", title or "")
         if match:
             year = int(match.group(1))
             title = title[:match.start()].strip()

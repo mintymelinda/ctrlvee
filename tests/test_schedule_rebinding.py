@@ -1,7 +1,13 @@
+import asyncio
+import json
+import os
+import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta
+from unittest.mock import Mock, patch
 
-from src.cogs.scheduler import _resolve_schedule_index
+from src.cogs.scheduler import PH_TZ, Scheduler, _resolve_schedule_index
 
 
 def leaf(name, folder="/movies"):
@@ -56,15 +62,6 @@ class ScheduleRebindingTests(unittest.TestCase):
         self.assertEqual(_resolve_schedule_index({"number": 2}, [self.original, self.other]), 1)
         self.assertIsNone(_resolve_schedule_index({"number": 5}, [self.original, self.other]))
 
-
-
-import asyncio
-import json
-import tempfile
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
-
-from src.cogs.scheduler import Scheduler, PH_TZ
 
 
 class ScheduledPlaybackLifecycleTests(unittest.TestCase):
@@ -175,7 +172,6 @@ class ScheduledPlaybackLifecycleTests(unittest.TestCase):
             self.assertEqual(loaded[0]["dt"], schedule["dt"])
             self.assertAlmostEqual(loaded[0]["next_attempt_at"], schedule["next_attempt_at"])
         finally:
-            import os
             os.unlink(backup_path)
 
 
