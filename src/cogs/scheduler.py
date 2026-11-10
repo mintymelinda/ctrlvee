@@ -132,22 +132,81 @@ class Scheduler(commands.Cog):
         return resolved
 
     def _load_schedule_backup(self):
-        if os.path.exists(SCHEDULE_BACKUP_FILE):
+        if not os.path.exists(SCHEDULE_BACKUP_FILE):
+            return []
+
+        try:
+            with open(SCHEDULE_BACKUP_FILE, "r") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading schedule backup: {e}")
+            return []
+
+        if not isinstance(data, list):
+            logger.error("Schedule backup must contain a list; ignoring invalid backup")
+            return []
+
+        schedules = []
+        for index, schedule in enumerate(data):
+            if not isinstance(schedule, dict):
+                logger.warning("Skipping invalid schedule backup entry at index %s", index)
+                continue
+
             try:
-                with open(SCHEDULE_BACKUP_FILE, "r") as f:
-                    data = json.load(f)
-                # Convert dt strings back to datetime
-                for s in data:
-                    if isinstance(s.get("dt"), str):
-                        s["dt"] = datetime.fromisoformat(s["dt"])
-                    if isinstance(s.get("next_attempt_at"), str):
-                        s["next_attempt_at"] = datetime.fromisoformat(s["next_attempt_at"])
-                    s.setdefault("status", "pending")
-                    s.setdefault("attempt_count", 0)
-                return data
-            except Exception as e:
-                logger.error(f"Error loading schedule backup: {e}")
-        return []
+                scheduled_at = schedule.get("dt")
+                if isinstance(scheduled_at, str):
+                    scheduled_at = datetime.fromisoformat(scheduled_at)
+                if not isinstance(scheduled_at, datetime):
+                    raise ValueError("missing or invalid scheduled datetime")
+                if scheduled_at.tzinfo is None:
+                    scheduled_at = scheduled_at.replace(tzinfo=PH_TZ)
+                schedule["dt"] = scheduled_at
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "Skipping schedule backup entry at index %s with invalid date: %s",
+                    index, exc,
+                )
+                continue
+
+            schedule.setdefault("status", "pending")
+            schedule.setdefault("attempt_count", 0)
+
+            retry_at = schedule.get("next_attempt_at")
+            if isinstance(retry_at, str):
+                try:
+                    retry_at = datetime.fromisoformat(retry_at)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=PH_TZ)
+                    schedule["next_attempt_at"] = retry_at
+                except ValueError:
+                    logger.warning(
+                        "Ignoring invalid retry timestamp for scheduled movie '%s'",
+                        schedule.get("title", "Unknown"),
+                    )
+                    schedule.pop("next_attempt_at", None)
+
+            started_at = schedule.get("execution_started_at")
+            if isinstance(started_at, str):
+                try:
+                    started_at = datetime.fromisoformat(started_at)
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=PH_TZ)
+                    schedule["execution_started_at"] = started_at.isoformat()
+                except ValueError:
+                    if schedule.get("status") == "executing":
+                        # An invalid claim timestamp is ambiguous. Start a fresh
+                        # confirmation window rather than immediately replaying it.
+                        schedule["execution_started_at"] = datetime.now(PH_TZ).isoformat()
+                        logger.warning(
+                            "Resetting invalid execution timestamp for scheduled movie '%s'",
+                            schedule.get("title", "Unknown"),
+                        )
+                    else:
+                        schedule.pop("execution_started_at", None)
+
+            schedules.append(schedule)
+
+        return schedules
 
     @commands.command(name="schedule")
     async def schedule_movie(self, ctx, number: int, date: str, time: str):
