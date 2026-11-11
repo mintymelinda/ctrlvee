@@ -394,6 +394,12 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             execution_started_at=started.isoformat(),
         )
         vlc = Mock()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
+        vlc.get_status.return_value = ET.fromstring("<root><state>paused</state></root>")
         scheduler = self.make_scheduler(schedule, vlc)
         now = datetime.now(PH_TZ)
 
