@@ -49,7 +49,10 @@ class VoiceChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         voice_client = Mock()
         voice_client.is_connected.return_value = True
         voice_client.channel = old_channel
-        voice_client.move_to = AsyncMock()
+        async def move_to(channel):
+            voice_client.channel = channel
+
+        voice_client.move_to = AsyncMock(side_effect=move_to)
 
         self.guild.voice_client = voice_client
 
