@@ -1716,13 +1716,25 @@ class VLCController:
             queue_id: str(self._queued_items[queue_id].get("playlist_item_id", self._queued_items[queue_id].get("item_id", queue_id)))
             for queue_id in candidate_queue_ids if queue_id in self._queued_items
         }
+        candidate_ids_set = set(candidate_queue_ids)
         preserved_queue_ids = []
         for queue_id, playlist_id in candidates.items():
             item = live_items.get(playlist_id)
             if item is None:
                 continue
             uri = item.get("uri")
-            if playlist_id == current_id or playlist_id in protected_ids or (uri and uri in protected_uri_values):
+            shared_by_other_entry = any(
+                other_id != queue_id
+                and other_id not in candidate_ids_set
+                and str(other_info.get("playlist_item_id", other_info.get("item_id", other_id))) == playlist_id
+                for other_id, other_info in self._queued_items.items()
+            )
+            if (
+                playlist_id == current_id
+                or playlist_id in protected_ids
+                or (uri and uri in protected_uri_values)
+                or shared_by_other_entry
+            ):
                 preserved_queue_ids.append(queue_id)
                 continue
             self.delete_playlist_item(playlist_id)
@@ -1797,7 +1809,11 @@ class VLCController:
                 return {"success": False, "error": f"Queue order {queue_order} not found"}
             name = self._queued_items[target_id].get("item_name", "Unknown")
             result = self._reconcile_queued_playlist_items([target_id], protected_item_ids, protected_uris)
-            result.update({"removed_item_id": target_id, "item_name": name})
+            result.update({
+                "queue_id": target_id,
+                "removed_item_id": self._queued_items.get(target_id, {}).get("playlist_item_id", self._queued_items.get(target_id, {}).get("item_id", target_id)),
+                "item_name": name,
+            })
             if not result["success"] and result.get("error") is None:
                 result["error"] = "Could not reconcile the VLC playlist entry"
             return result
