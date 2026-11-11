@@ -265,15 +265,27 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         initial = self.controller.get_shuffle_state()
         self.assertIsInstance(initial, bool)
-        self.controller.set_shuffle_state(not initial)
-        self.wait_for(
-            lambda: self.controller.get_shuffle_state() is not initial,
-            "shuffle state to change",
-        )
-        result = self.controller.set_shuffle_state(not initial)
-        self.assertTrue(result["success"])
-        self.assertFalse(result["changed"])
-        self.assertEqual(self.controller.get_shuffle_state(), not initial)
+        try:
+            self.controller.set_shuffle_state(not initial)
+            self.wait_for(
+                lambda: self.controller.get_shuffle_state() is not initial,
+                "shuffle state to change",
+            )
+            result = self.controller.set_shuffle_state(not initial)
+            self.assertTrue(result["success"])
+            self.assertFalse(result["changed"])
+            self.assertEqual(self.controller.get_shuffle_state(), not initial)
+        finally:
+            # This VLC process is shared by every integration test in the class.
+            # Restore the global playlist mode so the next test starts from the
+            # same baseline rather than clearing a playing shuffled playlist.
+            if self.process.poll() is None:
+                restored = self.controller.set_shuffle_state(initial)
+                self.assertTrue(restored["success"], restored)
+                self.wait_for(
+                    lambda: self.controller.get_shuffle_state() is initial,
+                    "shuffle state to return to its original value",
+                )
 
     def test_real_vlc_soft_queue_orders_removes_and_plays_items(self):
         first_id, second_id, third_id = self.load_playlist()
