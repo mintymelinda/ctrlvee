@@ -307,7 +307,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         queued_play = self.controller.play_next_queued_item()
         self.assertTrue(queued_play["success"], queued_play)
         current = self.wait_for_current_uri(self.media_paths[2].as_uri())
-        self.assertEqual(queued_play["item_id"], current.get("id"))
+        self.assertEqual(queued_play["item_id"], current)
         self.assertEqual(queued_play["queue_id"], second["queue_id"])
         self.assertEqual(len(self.controller.get_playlist().findall(".//leaf")), 4)
 
