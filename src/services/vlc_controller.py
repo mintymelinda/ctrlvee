@@ -1635,26 +1635,41 @@ class VLCController:
             self.logger.error(f"remove_from_queue_by_order error: {e}")
             return {"success": False, "error": str(e)}
 
-    def move_queue_item_by_order(self, queue_order: int, direction: str):
-        """Move a queued item one position earlier or later and persist the order."""
+    def remove_from_queue_by_id(self, item_id: str):
+        """Remove a queued item by its stable VLC playlist ID."""
         try:
+            item_id = str(item_id)
+            if item_id not in self._queued_items:
+                return {"success": False, "error": "That track is no longer queued"}
+            name = self._queued_items[item_id].get("item_name", "Unknown")
+            self._remove_from_queue(item_id)
+            return {"success": True, "removed_item_id": item_id, "item_name": name}
+        except Exception as e:
+            self.logger.error(f"remove_from_queue_by_id error: {e}")
+            return {"success": False, "error": str(e)}
+
+    def move_queued_item_by_id(self, item_id: str, direction: str):
+        """Move a queued item by stable VLC playlist ID and persist the new order."""
+        try:
+            item_id = str(item_id)
             if direction not in ("up", "down"):
                 return {"success": False, "error": "Direction must be 'up' or 'down'"}
+            if item_id not in self._queued_items:
+                return {"success": False, "error": "That track is no longer queued"}
 
             self._compact_queue_order()
             ordered_items = sorted(
                 self._queued_items.items(),
                 key=lambda entry: entry[1].get("queue_order", 0),
             )
-            current_index = int(queue_order) - 1
-            if current_index < 0 or current_index >= len(ordered_items):
-                return {"success": False, "error": f"Queue order {queue_order} not found"}
-
+            current_index = next(
+                index for index, entry in enumerate(ordered_items) if entry[0] == item_id
+            )
             target_index = current_index - 1 if direction == "up" else current_index + 1
             if target_index < 0 or target_index >= len(ordered_items):
                 return {"success": False, "error": "That item is already at the queue boundary"}
 
-            item_id, item_info = ordered_items[current_index]
+            _item_id, item_info = ordered_items[current_index]
             neighbor_id, neighbor_info = ordered_items[target_index]
             item_info["queue_order"], neighbor_info["queue_order"] = (
                 neighbor_info["queue_order"],
@@ -1669,7 +1684,7 @@ class VLCController:
                 "swapped_with": neighbor_id,
             }
         except Exception as e:
-            self.logger.error(f"move_queue_item_by_order error: {e}")
+            self.logger.error(f"move_queued_item_by_id error: {e}")
             return {"success": False, "error": str(e)}
 
     def remove_from_queue_by_playlist_number(self, number: int):
