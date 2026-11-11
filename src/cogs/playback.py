@@ -3055,7 +3055,8 @@ class PlaybackSubtitleTrackSelect(discord.ui.Select):
     def __init__(self, playback_view, tracks):
         self.playback_view = playback_view
         options = []
-        for position, track in enumerate(tracks, 1):
+        track_limit = 22 if len(tracks) > 1 else 24
+        for position, track in enumerate(tracks[:track_limit], 1):
             index = track.get("index") or position
             name = track.get("name") or f"Track {index}"
             options.append(discord.SelectOption(
