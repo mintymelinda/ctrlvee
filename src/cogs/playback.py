@@ -3909,7 +3909,7 @@ class QueueClearConfirmView(discord.ui.View):
                 if preserved_count else ""
             )
             await interaction.edit_original_response(
-                content=f"The soft queue has been cleared and safe VLC entries removed.{preserved_note}",
+                content=f"The bot-owned soft queue has been cleared. VLC's existing media playlist was left unchanged.{preserved_note}",
                 view=None,
             )
         except Exception:
