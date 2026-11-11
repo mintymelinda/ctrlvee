@@ -325,6 +325,8 @@ class Config:
             errors.append("WATCH_STABLE_AGE must be a valid number (seconds)")
             
         # Voice join validation
+        if cls.VOICE_AUTO_JOIN_ON_COMMAND and not cls.ENABLE_VOICE_JOIN:
+            errors.append("VOICE_AUTO_JOIN_ON_COMMAND requires ENABLE_VOICE_JOIN=true")
         if cls.ENABLE_VOICE_JOIN and cls.VOICE_AUTO_JOIN_ON_START:
             try:
                 if cls.VOICE_JOIN_CHANNEL_ID <= 0:
