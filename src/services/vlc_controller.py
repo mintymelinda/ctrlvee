@@ -1310,13 +1310,20 @@ class VLCController:
         if playlist_item_id is None:
             return None
         wanted = str(playlist_item_id)
-        return next(
-            (
-                queue_id for queue_id, info in self._queued_items.items()
-                if str(info.get("playlist_item_id", info.get("item_id", queue_id))) == wanted
+        matches = [
+            (queue_id, info)
+            for queue_id, info in self._queued_items.items()
+            if str(info.get("playlist_item_id", info.get("item_id", queue_id))) == wanted
+        ]
+        if not matches:
+            return None
+        return min(
+            matches,
+            key=lambda entry: (
+                entry[1].get("queue_order", 0),
+                entry[1].get("queued_at_time", 0),
             ),
-            None,
-        )
+        )[0]
 
     def _queue_info_for_playlist_item_id(self, playlist_item_id):
         queue_id = self._queue_id_for_playlist_item_id(playlist_item_id)
@@ -1331,6 +1338,9 @@ class VLCController:
             if item is None:
                 return {"success": False, "error": "item_not_found"}
 
+            current_position = self.get_current_position()
+            if current_position is None:
+                return {"success": False, "error": "Could not determine current position"}
             shuffle_was_on = self.get_shuffle_state()
             if shuffle_was_on and not self._queued_items:
                 self.toggle_shuffle()
@@ -1807,11 +1817,13 @@ class VLCController:
             )
             if target_id is None:
                 return {"success": False, "error": f"Queue order {queue_order} not found"}
-            name = self._queued_items[target_id].get("item_name", "Unknown")
+            info = self._queued_items[target_id]
+            name = info.get("item_name", "Unknown")
+            playlist_item_id = info.get("playlist_item_id", info.get("item_id", target_id))
             result = self._reconcile_queued_playlist_items([target_id], protected_item_ids, protected_uris)
             result.update({
                 "queue_id": target_id,
-                "removed_item_id": self._queued_items.get(target_id, {}).get("playlist_item_id", self._queued_items.get(target_id, {}).get("item_id", target_id)),
+                "removed_item_id": playlist_item_id,
                 "item_name": name,
             })
             if not result["success"] and result.get("error") is None:
