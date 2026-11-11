@@ -69,12 +69,15 @@ class VLCController:
                 raw_items = {}
             migrated = {}
             legacy_to_queue_id = {}
+            needs_migration = False
             for old_key, raw_info in raw_items.items():
                 if not isinstance(raw_info, dict):
                     continue
                 info = dict(raw_info)
                 playlist_item_id = info.get("playlist_item_id", info.get("item_id", old_key))
                 queue_id = str(info.get("queue_id") or uuid.uuid4())
+                if str(old_key) != queue_id or "queue_id" not in info or "playlist_item_id" not in info:
+                    needs_migration = True
                 info["queue_id"] = queue_id
                 info["playlist_item_id"] = str(playlist_item_id) if playlist_item_id is not None else None
                 info["item_id"] = info["playlist_item_id"]
@@ -96,7 +99,7 @@ class VLCController:
                 len(self._queued_items),
                 len(self._shuffle_restore_queue),
             )
-            if any(str(key) != str(info.get("queue_id")) for key, info in raw_items.items() if isinstance(info, dict)):
+            if needs_migration:
                 self._save_queue_backup()
         except Exception as error:
             self.logger.error("Error loading queue backup: %s", error)
@@ -109,6 +112,7 @@ class VLCController:
         """Save current queue state to backup file"""
         try:
             backup_data = {
+                'queue_schema_version': 2,
                 'queued_items': dict(self._queued_items),
                 'shuffle_restore_queue': list(self._shuffle_restore_queue),
                 'pending_queue_item_id': self._pending_queue_item_id,
