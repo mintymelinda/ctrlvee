@@ -297,7 +297,9 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 "third": {"queue_order": 3, "item_name": "Third"},
                 "first": {"queue_order": 1, "item_name": "First"},
                 "second": {"queue_order": 2, "item_name": "Second"},
-            }        }        playlist = ET.fromstring(
+            }
+        }
+        playlist = ET.fromstring(
             '<playlist><leaf id="first" name="First Track"/>'
             '<leaf id="second" name="Second Track"/>'
             '<leaf id="third" name="Third Track"/></playlist>'
@@ -595,8 +597,10 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_advanced_selects_dispatch_existing_guarded_commands(self):
         cases = (
             (PlaybackAudioTrackSelect, [{"index": 3, "name": "English"}], "3", "audio_set", ("3",)),
-            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "2", "subtitle_set", ("2",)),            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "off", "subtitle_set", ("off",)),
-            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__next__", "subtitle_next", ()),            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__previous__", "subtitle_prev", ()),
+            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "2", "subtitle_set", ("2",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "off", "subtitle_set", ("off",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__next__", "subtitle_next", ()),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__previous__", "subtitle_prev", ()),
             (PlaybackSpeedSelect, [], "1.5", "speed", ("1.5",)),
         )
         for select_type, tracks, value, command, args in cases:
@@ -945,7 +949,8 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             view._dispatch.assert_awaited_once_with(interaction, command)
     async def test_management_menu_routes_queue_tools_to_existing_handlers(self):
         view = PlaybackControlView(Mock())
-        interaction = SimpleNamespace(            response=SimpleNamespace(send_message=AsyncMock())
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(send_message=AsyncMock())
         )
         view.manage_queue_button = AsyncMock()
         view.add_to_queue_button = AsyncMock()
@@ -1031,9 +1036,6 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(view.remove_selected_button.disabled)
         interaction.response.edit_message.assert_awaited_once()
 
-
-if __name__ == "__main__":
-    unittest.main()
 
     async def test_playback_panel_lifecycle_persists_restores_and_refreshes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1287,3 +1289,7 @@ if __name__ == "__main__":
             channel.fetch_message.assert_awaited_once_with(654)
             self.assertIs(cog._playback_panel_messages[654], message)
             self.assertTrue(cog._playback_panel_registry_restored)
+
+
+if __name__ == "__main__":
+    unittest.main()
