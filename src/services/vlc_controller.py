@@ -6,6 +6,7 @@ import json
 import xml.etree.ElementTree as ET
 import requests
 import logging
+import uuid
 
 class VLCError(Exception):
     """Base exception for VLC controller errors"""
@@ -49,39 +50,72 @@ class VLCController:
         self._load_queue_backup()
 
     def _load_queue_backup(self):
-        """Load queue state from backup file"""
+        """Load and migrate queue state to independent queue-entry identities."""
         try:
-            if os.path.exists(self.queue_backup_file) and os.path.getsize(self.queue_backup_file) > 0:
-                with open(self.queue_backup_file, 'r') as f:
-                    backup_data = json.load(f)
-                    
-                # Convert old format to new format if needed
-                if isinstance(backup_data, list) and backup_data and 'item_id' in backup_data[0]:
-                    # Old format from previous queue system
-                    self.logger.info("Found old queue format - clearing and starting fresh with new format")
-                    self._queued_items = {}
-                    self._shuffle_restore_queue = []
-                    self._save_queue_backup()  # Save empty new format
-                elif isinstance(backup_data, dict):
-                    # New format
-                    self._queued_items = backup_data.get('queued_items', {})
-                    self._shuffle_restore_queue = backup_data.get('shuffle_restore_queue', [])
-                    self.logger.info(f"Loaded queue backup: {len(self._queued_items)} queued items, {len(self._shuffle_restore_queue)} pending shuffle restores")
-                else:
-                    # Empty or invalid format
-                    self._queued_items = {}
-                    self._shuffle_restore_queue = []
-        except Exception as e:
-            self.logger.error(f"Error loading queue backup: {e}")
+            if not os.path.exists(self.queue_backup_file) or os.path.getsize(self.queue_backup_file) == 0:
+                return
+            with open(self.queue_backup_file, "r") as backup_file:
+                backup_data = json.load(backup_file)
+
+            if isinstance(backup_data, list):
+                self.logger.info("Discarding obsolete list-based queue backup")
+                self._save_queue_backup()
+                return
+            if not isinstance(backup_data, dict):
+                return
+
+            raw_items = backup_data.get("queued_items", {})
+            if not isinstance(raw_items, dict):
+                raw_items = {}
+            migrated = {}
+            legacy_to_queue_id = {}
+            needs_migration = False
+            for old_key, raw_info in raw_items.items():
+                if not isinstance(raw_info, dict):
+                    continue
+                info = dict(raw_info)
+                playlist_item_id = info.get("playlist_item_id", info.get("item_id", old_key))
+                queue_id = str(info.get("queue_id") or uuid.uuid4())
+                if str(old_key) != queue_id or "queue_id" not in info or "playlist_item_id" not in info:
+                    needs_migration = True
+                info["queue_id"] = queue_id
+                info["playlist_item_id"] = str(playlist_item_id) if playlist_item_id is not None else None
+                info["item_id"] = info["playlist_item_id"]
+                migrated[queue_id] = info
+                legacy_to_queue_id[str(old_key)] = queue_id
+                if playlist_item_id is not None:
+                    legacy_to_queue_id[str(playlist_item_id)] = queue_id
+
+            self._queued_items = migrated
+            self._shuffle_restore_queue = [
+                legacy_to_queue_id.get(str(value), str(value))
+                for value in backup_data.get("shuffle_restore_queue", [])
+                if legacy_to_queue_id.get(str(value), str(value)) in migrated
+            ]
+            pending = backup_data.get("pending_queue_item_id")
+            self._pending_queue_item_id = legacy_to_queue_id.get(str(pending)) if pending is not None else None
+            self.logger.info(
+                "Loaded queue backup: %s queued entries, %s pending shuffle restores",
+                len(self._queued_items),
+                len(self._shuffle_restore_queue),
+            )
+            if needs_migration:
+                self._save_queue_backup()
+        except Exception as error:
+            self.logger.error("Error loading queue backup: %s", error)
             self._queued_items = {}
             self._shuffle_restore_queue = []
+            self._pending_queue_item_id = None
+
 
     def _save_queue_backup(self):
         """Save current queue state to backup file"""
         try:
             backup_data = {
+                'queue_schema_version': 2,
                 'queued_items': dict(self._queued_items),
                 'shuffle_restore_queue': list(self._shuffle_restore_queue),
+                'pending_queue_item_id': self._pending_queue_item_id,
                 'backup_timestamp': __import__('time').time()
             }
             with open(self.queue_backup_file, 'w') as f:
@@ -261,13 +295,19 @@ class VLCController:
         """Prefer the soft queue, otherwise advance and capture the selected item."""
         queued_item = self.get_next_queued_item()
         queued_result = self.play_next_queued_item() if queued_item else None
-        if queued_result and queued_result.get("success"):
+        if queued_item:
+            if queued_result and queued_result.get("success"):
+                return {
+                    "queued_result": queued_result,
+                    "next_success": False,
+                    "expected_item_id": str(
+                        queued_result.get("item_id") or queued_item.get("item_id")
+                    ) if queued_result.get("item_id") or queued_item.get("item_id") else None,
+                }
             return {
                 "queued_result": queued_result,
                 "next_success": False,
-                "expected_item_id": str(
-                    queued_result.get("item_id") or queued_item.get("item_id")
-                ) if queued_result.get("item_id") or queued_item.get("item_id") else None,
+                "expected_item_id": None,
             }
         next_result = self.next()
         if not next_result:
@@ -1275,100 +1315,100 @@ class VLCController:
         
         return None
     
+    def _queue_id_for_playlist_item_id(self, playlist_item_id):
+        """Resolve a VLC playlist item ID to its independent soft-queue entry ID."""
+        if playlist_item_id is None:
+            return None
+        wanted = str(playlist_item_id)
+        matches = [
+            (queue_id, info)
+            for queue_id, info in self._queued_items.items()
+            if str(info.get("playlist_item_id", info.get("item_id", queue_id))) == wanted
+        ]
+        if not matches:
+            return None
+        return min(
+            matches,
+            key=lambda entry: (
+                entry[1].get("queue_order", 0),
+                entry[1].get("queued_at_time", 0),
+            ),
+        )[0]
+
+    def _queue_info_for_playlist_item_id(self, playlist_item_id):
+        queue_id = self._queue_id_for_playlist_item_id(playlist_item_id)
+        return (queue_id, self._queued_items.get(queue_id)) if queue_id else (None, None)
+
     def queue_item_next(self, item_id, restore_shuffle=True):
-        """
-        Queue an item to play next using soft queue system (VLC 3.x compatible)
-        
-        This method doesn't physically move items in the playlist but tracks
-        what should play next and handles it when tracks finish playing.
-        
-        Args:
-            item_id: The playlist item ID to queue
-            restore_shuffle: Whether to restore shuffle after the queued item plays
-            
-        Returns:
-            dict: Status information about the queuing operation
-        """
+        """Add a VLC media reference as a new, independently identified queue entry."""
         try:
-            # Get current state
-            shuffle_was_on = self.get_shuffle_state()
-            current_pos = self.get_current_position()
-            
-            if current_pos is None:
+            playlist_item_id = str(item_id)
+            current_position = self.get_current_position()
+            if current_position is None:
                 return {"success": False, "error": "Could not determine current position"}
-            
-            self.logger.info(f"Soft-queuing item {item_id} to play next (shuffle was {'on' if shuffle_was_on else 'off'})")
-            
-            # If shuffle is on and this is the first queued item, temporarily disable it
-            if shuffle_was_on and len(self._queued_items) == 0:
+            playlist = self.get_playlist()
+            if playlist is None:
+                return {"success": False, "error": "playlist_unavailable"}
+            item = next(
+                (leaf for leaf in playlist.findall(".//leaf") if str(leaf.get("id")) == playlist_item_id),
+                None,
+            )
+            if item is None:
+                return {"success": False, "error": "item_not_found"}
+            existing_queue_id = self._queue_id_for_playlist_item_id(playlist_item_id)
+            if existing_queue_id is not None:
+                return {
+                    "success": False,
+                    "error": "item_already_queued",
+                    "queue_id": existing_queue_id,
+                }
+            shuffle_was_on = self.get_shuffle_state()
+            if shuffle_was_on and not self._queued_items:
                 self.toggle_shuffle()
-            
-            # For soft queue, we don't move items physically
-            # Instead, we track the queue order in memory
+
             self._compact_queue_order()
-            existing_queue_count = len(self._queued_items)
-            queue_order = existing_queue_count + 1
-            
-            # Get item info for display
-            playlist_map, _ = self._parse_playlist_info()
-            item_name = "Unknown"
-            
-            if str(item_id) in playlist_map:
-                item_name = playlist_map[str(item_id)]['name']
-            
-            # Track this queued item for soft queue management
-            # For shuffle restoration: if shuffle was on when we started queuing,
-            # the LAST item in the queue should restore it (not just the first)
-            should_restore_shuffle = False
-            if shuffle_was_on and len(self._queued_items) == 0:
-                # This is the first item and shuffle was on - mark for restoration
-                should_restore_shuffle = True
-            elif len(self._queued_items) > 0:
-                # Check if any existing item in the queue is marked for shuffle restoration
-                for existing_item in self._queued_items.values():
-                    if existing_item.get("restore_shuffle", False):
-                        should_restore_shuffle = True
-                        break
-            
+            queue_order = len(self._queued_items) + 1
+            should_restore_shuffle = bool(
+                (shuffle_was_on and not self._queued_items)
+                or any(info.get("restore_shuffle", False) for info in self._queued_items.values())
+            )
+            queue_id = str(uuid.uuid4())
             queue_info = {
-                "item_id": item_id,
-                "item_name": item_name,
+                "queue_id": queue_id,
+                "playlist_item_id": playlist_item_id,
+                "item_id": playlist_item_id,
+                "media_uri": item.get("uri"),
+                "item_name": item.get("name", "Unknown"),
                 "queue_order": queue_order,
                 "shuffle_was_on": shuffle_was_on,
                 "restore_shuffle": should_restore_shuffle,
-                "queued_at_time": __import__('time').time(),
-                "queue_type": "soft"  # Indicates this is a soft queue item
+                "queued_at_time": __import__("time").time(),
+                "queue_type": "soft",
             }
-            
-            self._queued_items[item_id] = queue_info
-            
-            # Update all existing items to NOT restore shuffle (only the last one should)
+            self._queued_items[queue_id] = queue_info
+
             if should_restore_shuffle and len(self._queued_items) > 1:
-                for existing_id, existing_item in self._queued_items.items():
-                    if existing_id != item_id:  # Don't update the item we just added
-                        existing_item["restore_shuffle"] = False
-            
-            # Add to shuffle restore queue if needed
+                for existing_id, existing_info in self._queued_items.items():
+                    if existing_id != queue_id:
+                        existing_info["restore_shuffle"] = False
             if shuffle_was_on and restore_shuffle:
-                self._shuffle_restore_queue.append(item_id)
-            
-            # Save queue state to backup file
+                self._shuffle_restore_queue.append(queue_id)
+
             self._save_queue_backup()
-            
-            result = {
+            return {
                 "success": True,
-                "item_id": item_id,
-                "item_name": item_name,
+                "queue_id": queue_id,
+                "item_id": playlist_item_id,
+                "playlist_item_id": playlist_item_id,
+                "item_name": queue_info["item_name"],
                 "queue_order": queue_order,
-                "total_queued": len(self._queued_items)
+                "total_queued": len(self._queued_items),
             }
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Error soft-queuing item: {e}")
-            return {"success": False, "error": str(e)}
-    
+        except Exception as error:
+            self.logger.error("Error soft-queuing item: %s", error)
+            return {"success": False, "error": str(error)}
+
+
     def restore_shuffle_if_needed(self, was_shuffle_on):
         """
         Restore shuffle mode if it was previously enabled
@@ -1392,31 +1432,27 @@ class VLCController:
             queue_info["queue_order"] = queue_order
 
     def get_next_queued_item(self):
-        """Get the next item that should play from the soft queue
-        
-        Returns:
-            dict: Next queue item info or None if no items queued
-        """
+        """Return the earliest queue entry and its current VLC playback reference."""
         if not self._queued_items:
             return None
-        
-        # Sort queued items by queue order to get the next one
-        sorted_items = sorted(
-            self._queued_items.items(), 
-            key=lambda x: x[1].get('queue_order', 0)
+        queue_id, info = min(
+            self._queued_items.items(),
+            key=lambda entry: (
+                entry[1].get("queue_order", 0),
+                entry[1].get("queued_at_time", 0),
+            ),
         )
-        
-        if sorted_items:
-            next_item_id, next_item_info = sorted_items[0]
-            return {
-                "item_id": next_item_id,
-                "item_name": next_item_info.get("item_name", "Unknown"),
-                "queue_order": next_item_info.get("queue_order", 0),
-                "restore_shuffle": next_item_info.get("restore_shuffle", False)
-            }
-        
-        return None
-    
+        playlist_item_id = info.get("playlist_item_id", info.get("item_id", queue_id))
+        return {
+            "queue_id": queue_id,
+            "item_id": str(playlist_item_id) if playlist_item_id is not None else None,
+            "playlist_item_id": str(playlist_item_id) if playlist_item_id is not None else None,
+            "item_name": info.get("item_name", "Unknown"),
+            "queue_order": info.get("queue_order", 0),
+            "restore_shuffle": info.get("restore_shuffle", False),
+        }
+
+
     def play_queued_item_if_monitor_state(
         self,
         expected_state: str,
@@ -1489,58 +1525,41 @@ class VLCController:
         return result
 
     def play_next_queued_item(self):
-        """Play the next item from the soft queue
-        
-        Returns:
-            dict: Result of playing the next queued item
-        """
+        """Play the next queue entry through its current VLC playlist reference."""
         if self._pending_queue_item_id in self._queued_items:
-            return {
-                "success": False,
-                "error": f"Queued item {self._pending_queue_item_id} is already starting",
-            }
+            return {"success": False, "error": f"Queued entry {self._pending_queue_item_id} is already starting"}
         self._pending_queue_item_id = None
         self._pending_queue_started_at = None
 
         next_item = self.get_next_queued_item()
         if not next_item:
             return {"success": False, "error": "No items in queue"}
-        
-        item_id = next_item["item_id"]
-        item_name = next_item["item_name"]
-        
-        # Check if this is the last item in the queue before playing it
+        queue_id = next_item["queue_id"]
+        playlist_item_id = next_item["playlist_item_id"]
+        if playlist_item_id is None:
+            return {"success": False, "error": "Queued media has no VLC playlist reference"}
         remaining_queue_items = len(self._queued_items)
         should_restore_shuffle = next_item.get("restore_shuffle", False)
-        
-        # Play the item
-        success = self.play_item_by_id(item_id)
-        
-        if success:
-            # If this was the last item in the queue and it needs shuffle restored,
-            # restore shuffle immediately when it starts playing (not when it ends)
-            if remaining_queue_items == 1 and should_restore_shuffle:
-                current_shuffle = self.get_shuffle_state()
-                if not current_shuffle:
-                    self.logger.info(f"Restoring shuffle mode - last queued item ({item_name}) is now playing")
-                    self.toggle_shuffle()
-            
-            # Keep the item tracked until the monitor confirms that it became
-            # the current playlist item. This prevents the same observation from
-            # being mistaken for natural progression to the next queued item.
-            self._pending_queue_item_id = item_id
-            self._pending_queue_started_at = __import__('time').time()
+        success = self.play_item_by_id(playlist_item_id)
+        if not success:
+            return {"success": False, "error": f"Failed to play item {playlist_item_id}"}
 
-            self.logger.info(f"Started queued item: {item_name} (ID: {item_id})")
-            return {
-                "success": True,
-                "item_id": item_id,
-                "item_name": item_name,
-                "queue_order": next_item["queue_order"]
-            }
-        else:
-            self.logger.error(f"Failed to play queued item: {item_name} (ID: {item_id})")
-            return {"success": False, "error": f"Failed to play item {item_id}"}
+        if remaining_queue_items == 1 and should_restore_shuffle and not self.get_shuffle_state():
+            self.logger.info("Restoring shuffle mode - last queued item (%s) is now playing", next_item["item_name"])
+            self.toggle_shuffle()
+
+        self._pending_queue_item_id = queue_id
+        self._pending_queue_started_at = __import__("time").time()
+        self.logger.info("Started queued entry %s: %s (VLC ID: %s)", queue_id, next_item["item_name"], playlist_item_id)
+        return {
+            "success": True,
+            "queue_id": queue_id,
+            "item_id": playlist_item_id,
+            "playlist_item_id": playlist_item_id,
+            "item_name": next_item["item_name"],
+            "queue_order": next_item["queue_order"],
+        }
+
 
     def check_and_handle_queue_transition(
         self,
@@ -1586,11 +1605,10 @@ class VLCController:
         # A successful queue play can precede VLC reporting the new current
         # item. Ignore stale observations until the pending item is confirmed.
         if self._pending_queue_item_id is not None:
-            if str(current_item_id) == str(self._pending_queue_item_id):
-                self.logger.info(
-                    "VLC confirmed queued item %s is now playing",
-                    current_item_id,
-                )
+            pending_info = self._queued_items.get(self._pending_queue_item_id, {})
+            pending_playlist_id = pending_info.get("playlist_item_id", pending_info.get("item_id"))
+            if str(current_item_id) == str(pending_playlist_id):
+                self.logger.info("VLC confirmed queued entry %s is now playing", self._pending_queue_item_id)
                 self._pending_queue_item_id = None
                 self._pending_queue_started_at = None
             else:
@@ -1615,18 +1633,15 @@ class VLCController:
                 self._pending_queue_item_id = None
                 self._pending_queue_started_at = None
 
-        if current_item_id in self._queued_items:
-            queue_info = self._queued_items[current_item_id]
+        queue_id, queue_info = self._queue_info_for_playlist_item_id(current_item_id)
+        if queue_id is not None:
             item_name = queue_info.get("item_name", "Unknown")
-            self.logger.info(
-                "Soft-queued item now playing: %s (ID: %s)",
-                item_name,
-                current_item_id,
-            )
-            self._remove_from_queue(current_item_id)
+            self.logger.info("Soft-queued entry now playing: %s (queue ID: %s, VLC ID: %s)", item_name, queue_id, current_item_id)
+            self._remove_from_queue(queue_id)
             transitions.append({
                 "action": "queued_item_started",
-                "item_id": current_item_id,
+                "queue_id": queue_id,
+                "item_id": str(current_item_id),
                 "item_name": item_name,
                 "success": True,
             })
@@ -1654,11 +1669,7 @@ class VLCController:
         }
     
     def reconcile_queue_with_playlist(self):
-        """Drop persisted soft-queue entries that no longer exist in VLC.
-
-        A missing playlist response is not evidence that the playlist is empty:
-        leave the saved queue untouched so a temporary VLC outage cannot erase it.
-        """
+        """Rebind saved queue entries to regenerated VLC IDs using media URIs."""
         playlist = self.get_playlist()
         if playlist is None:
             return {
@@ -1668,46 +1679,85 @@ class VLCController:
                 "remaining": len(self._queued_items),
             }
 
-        live_items = {
-            str(item.get("id")): item
-            for item in playlist.findall(".//leaf")
+        live_leaves = [
+            item for item in playlist.findall(".//leaf")
             if item.get("id") is not None
-        }
-        removed_item_ids = []
-        for item_id, queue_info in list(self._queued_items.items()):
-            if str(item_id) not in live_items or not isinstance(queue_info, dict):
-                removed_item_ids.append(str(item_id))
-                self._queued_items.pop(item_id, None)
+        ]
+        live_by_id = {str(item.get("id")): item for item in live_leaves}
+        live_by_uri = {}
+        for item in live_leaves:
+            uri = item.get("uri")
+            if uri:
+                live_by_uri.setdefault(str(uri), []).append(item)
 
-        # A shuffle-restore marker is meaningful only while its item remains
-        # queued. Keep order and remove duplicates from older backup files.
-        valid_restore_ids = []
-        seen_restore_ids = set()
-        for item_id in self._shuffle_restore_queue:
-            normalized_id = str(item_id)
-            if normalized_id in self._queued_items and normalized_id not in seen_restore_ids:
-                valid_restore_ids.append(normalized_id)
-                seen_restore_ids.add(normalized_id)
-        self._shuffle_restore_queue = valid_restore_ids
+        removed_queue_ids = []
+        rebound_queue_ids = []
+        ambiguous_queue_ids = []
+        for queue_id, info in list(self._queued_items.items()):
+            if not isinstance(info, dict):
+                removed_queue_ids.append(queue_id)
+                self._queued_items.pop(queue_id, None)
+                continue
 
+            old_playlist_id = info.get("playlist_item_id", info.get("item_id", queue_id))
+            media_uri = info.get("media_uri")
+            current_leaf = live_by_id.get(str(old_playlist_id)) if old_playlist_id is not None else None
+            if current_leaf is not None and (
+                not media_uri or str(current_leaf.get("uri")) == str(media_uri)
+            ):
+                if not media_uri and current_leaf.get("uri"):
+                    info["media_uri"] = current_leaf.get("uri")
+                info["playlist_item_id"] = str(current_leaf.get("id"))
+                info["item_id"] = str(current_leaf.get("id"))
+                if current_leaf.get("name"):
+                    info["item_name"] = current_leaf.get("name")
+                continue
+
+            matches = live_by_uri.get(str(media_uri), []) if media_uri else []
+            if len(matches) == 1:
+                replacement = matches[0]
+                info["playlist_item_id"] = str(replacement.get("id"))
+                info["item_id"] = str(replacement.get("id"))
+                info.pop("stale_playlist_item_id", None)
+                info.pop("unresolved_reason", None)
+                if replacement.get("name"):
+                    info["item_name"] = replacement.get("name")
+                rebound_queue_ids.append(queue_id)
+            elif len(matches) > 1:
+                info["stale_playlist_item_id"] = info.get("stale_playlist_item_id", old_playlist_id)
+                info["playlist_item_id"] = None
+                info["item_id"] = None
+                info["unresolved_reason"] = "ambiguous_media_uri"
+                ambiguous_queue_ids.append(queue_id)
+            else:
+                removed_queue_ids.append(queue_id)
+                self._queued_items.pop(queue_id, None)
+
+        self._shuffle_restore_queue = [
+            queue_id for queue_id in dict.fromkeys(self._shuffle_restore_queue)
+            if queue_id in self._queued_items
+        ]
         self._compact_queue_order()
-        if self._pending_queue_item_id is not None and str(self._pending_queue_item_id) not in self._queued_items:
+        if self._pending_queue_item_id not in self._queued_items:
             self._pending_queue_item_id = None
             self._pending_queue_started_at = None
-
         self._save_queue_backup()
+        ordered_queue_ids = [
+            queue_id for queue_id, _ in sorted(
+                self._queued_items.items(),
+                key=lambda entry: entry[1].get("queue_order", 0),
+            )
+        ]
         return {
             "success": True,
-            "removed_item_ids": removed_item_ids,
+            "removed_queue_ids": removed_queue_ids,
+            "removed_item_ids": removed_queue_ids,
+            "rebound_queue_ids": rebound_queue_ids,
+            "ambiguous_queue_ids": ambiguous_queue_ids,
             "remaining": len(self._queued_items),
-            "queued_item_ids": [
-                item_id
-                for item_id, _ in sorted(
-                    self._queued_items.items(),
-                    key=lambda entry: entry[1].get("queue_order", 0),
-                )
-            ],
+            "queued_item_ids": ordered_queue_ids,
         }
+
 
     def clear_queue_tracking(self):
         """Clear all queue tracking state (useful for reset/cleanup)"""
@@ -1718,82 +1768,86 @@ class VLCController:
         self._save_queue_backup()
         self.logger.info("Cleared all queue tracking state including shuffle restore queue")
 
-    def _reconcile_queued_playlist_items(self, item_ids, protected_item_ids=None, protected_uris=None):
-        """Delete safe queued VLC entries, then reconcile durable queue tracking."""
+    def _reconcile_queued_playlist_items(self, queue_ids, protected_item_ids=None, protected_uris=None):
+        """Delete safe VLC references for queue entries, then remove their entry IDs."""
         playlist = self.get_playlist()
         if playlist is None:
             return {
-                "success": False,
-                "error": "playlist_unavailable",
-                "removed_item_ids": [],
-                "preserved_item_ids": [],
-                "failed_item_ids": [str(item_id) for item_id in item_ids],
+                "success": False, "error": "playlist_unavailable",
+                "removed_item_ids": [], "removed_queue_ids": [],
+                "preserved_item_ids": [], "failed_item_ids": [str(value) for value in queue_ids],
             }
-
-        protected_ids = {str(item_id) for item_id in (protected_item_ids or ())}
-        protected_uri_values = {str(uri) for uri in (protected_uris or ()) if uri}
+        protected_ids = {str(value) for value in (protected_item_ids or ())}
+        protected_uri_values = {str(value) for value in (protected_uris or ()) if value}
         live_items = {
-            str(item.get("id")): item
-            for item in playlist.findall(".//leaf")
+            str(item.get("id")): item for item in playlist.findall(".//leaf")
             if item.get("id") is not None
         }
-        current_item, _ = self._current_playlist_item(playlist)
-        current_id = str(current_item.get("id")) if current_item is not None else None
-        candidate_ids = [str(item_id) for item_id in item_ids]
-        preserved_ids = []
-
-        for item_id in candidate_ids:
-            item = live_items.get(item_id)
+        current, _ = self._current_playlist_item(playlist)
+        current_id = str(current.get("id")) if current is not None else None
+        candidate_queue_ids = [str(value) for value in queue_ids]
+        candidates = {
+            queue_id: str(self._queued_items[queue_id].get("playlist_item_id", self._queued_items[queue_id].get("item_id", queue_id)))
+            for queue_id in candidate_queue_ids if queue_id in self._queued_items
+        }
+        candidate_ids_set = set(candidate_queue_ids)
+        preserved_queue_ids = []
+        for queue_id, playlist_id in candidates.items():
+            item = live_items.get(playlist_id)
             if item is None:
                 continue
             uri = item.get("uri")
-            if item_id == current_id or item_id in protected_ids or (uri and uri in protected_uri_values):
-                preserved_ids.append(item_id)
+            shared_by_other_entry = any(
+                other_id != queue_id
+                and other_id not in candidate_ids_set
+                and str(other_info.get("playlist_item_id", other_info.get("item_id", other_id))) == playlist_id
+                for other_id, other_info in self._queued_items.items()
+            )
+            if (
+                playlist_id == current_id
+                or playlist_id in protected_ids
+                or (uri and uri in protected_uri_values)
+                or shared_by_other_entry
+            ):
+                preserved_queue_ids.append(queue_id)
                 continue
-            if not self.delete_playlist_item(item_id):
-                self.logger.warning("Could not delete queued VLC playlist item %s", item_id)
+            self.delete_playlist_item(playlist_id)
 
-        confirmed_playlist = self.get_playlist()
-        if confirmed_playlist is None:
+        confirmed = self.get_playlist()
+        if confirmed is None:
             return {
-                "success": False,
-                "error": "playlist_unavailable_after_delete",
-                "removed_item_ids": [],
-                "preserved_item_ids": preserved_ids,
-                "failed_item_ids": candidate_ids,
+                "success": False, "error": "playlist_unavailable_after_delete",
+                "removed_item_ids": [], "removed_queue_ids": [],
+                "preserved_item_ids": preserved_queue_ids, "failed_item_ids": candidate_queue_ids,
             }
-
         remaining_ids = {
-            str(item.get("id"))
-            for item in confirmed_playlist.findall(".//leaf")
+            str(item.get("id")) for item in confirmed.findall(".//leaf")
             if item.get("id") is not None
         }
-        removed_ids = []
-        failed_ids = []
-        for item_id in candidate_ids:
-            if item_id not in self._queued_items:
-                continue
-            item_uri = live_items[item_id].get("uri") if item_id in live_items else None
-            is_protected = (
-                item_id == current_id
-                or item_id in protected_ids
-                or item_id in preserved_ids
+        removed_queue_ids, failed_queue_ids = [], []
+        for queue_id, playlist_id in candidates.items():
+            item_uri = live_items.get(playlist_id).get("uri") if playlist_id in live_items else None
+            protected = (
+                playlist_id == current_id or playlist_id in protected_ids
+                or queue_id in preserved_queue_ids
                 or (item_uri and item_uri in protected_uri_values)
             )
-            if item_id not in remaining_ids or is_protected:
-                self._remove_from_queue(item_id)
-                removed_ids.append(item_id)
+            if playlist_id not in remaining_ids or protected:
+                self._remove_from_queue(queue_id)
+                removed_queue_ids.append(queue_id)
             else:
-                failed_ids.append(item_id)
-
+                failed_queue_ids.append(queue_id)
         return {
-            "success": not failed_ids,
-            "error": "playlist_item_delete_failed" if failed_ids else None,
-            "removed_item_ids": removed_ids,
-            "preserved_item_ids": [item_id for item_id in preserved_ids if item_id in remaining_ids],
-            "failed_item_ids": failed_ids,
+            "success": not failed_queue_ids,
+            "error": "playlist_item_delete_failed" if failed_queue_ids else None,
+            "removed_queue_ids": removed_queue_ids,
+            "removed_item_ids": [candidates[value] for value in removed_queue_ids],
+            "preserved_item_ids": [candidates[value] for value in preserved_queue_ids if candidates[value] in remaining_ids],
+            "failed_item_ids": [candidates[value] for value in failed_queue_ids],
+            "failed_queue_ids": failed_queue_ids,
             "remaining": len(self._queued_items),
         }
+
 
     def clear_queue(self, protected_item_ids=None, protected_uris=None):
         """Clear soft-queue tracking and delete only safe VLC playlist entries."""
@@ -1827,9 +1881,15 @@ class VLCController:
             )
             if target_id is None:
                 return {"success": False, "error": f"Queue order {queue_order} not found"}
-            name = self._queued_items[target_id].get("item_name", "Unknown")
+            info = self._queued_items[target_id]
+            name = info.get("item_name", "Unknown")
+            playlist_item_id = info.get("playlist_item_id", info.get("item_id", target_id))
             result = self._reconcile_queued_playlist_items([target_id], protected_item_ids, protected_uris)
-            result.update({"removed_item_id": target_id, "item_name": name})
+            result.update({
+                "queue_id": target_id,
+                "removed_item_id": playlist_item_id,
+                "item_name": name,
+            })
             if not result["success"] and result.get("error") is None:
                 result["error"] = "Could not reconcile the VLC playlist entry"
             return result
@@ -1837,86 +1897,80 @@ class VLCController:
             self.logger.error(f"remove_from_queue_by_order error: {e}")
             return {"success": False, "error": str(e)}
 
-    def remove_from_queue_by_id(self, item_id: str, protected_item_ids=None, protected_uris=None):
-        """Remove a queued item by stable identity and reconcile its VLC entry."""
+    def remove_from_queue_by_id(self, queue_id: str, protected_item_ids=None, protected_uris=None):
+        """Remove a queue entry by its independent ID and reconcile its VLC reference."""
         try:
-            item_id = str(item_id)
-            if item_id not in self._queued_items:
+            queue_id = str(queue_id)
+            if queue_id not in self._queued_items:
                 return {"success": False, "error": "That track is no longer queued"}
-            name = self._queued_items[item_id].get("item_name", "Unknown")
-            result = self._reconcile_queued_playlist_items([item_id], protected_item_ids, protected_uris)
-            result.update({"removed_item_id": item_id, "item_name": name})
+            info = self._queued_items[queue_id]
+            result = self._reconcile_queued_playlist_items([queue_id], protected_item_ids, protected_uris)
+            result.update({
+                "queue_id": queue_id,
+                "removed_item_id": info.get("playlist_item_id", info.get("item_id", queue_id)),
+                "item_name": info.get("item_name", "Unknown"),
+            })
             if not result["success"] and result.get("error") is None:
                 result["error"] = "Could not reconcile the VLC playlist entry"
             return result
-        except Exception as e:
-            self.logger.error(f"remove_from_queue_by_id error: {e}")
-            return {"success": False, "error": str(e)}
+        except Exception as error:
+            self.logger.error("remove_from_queue_by_id error: %s", error)
+            return {"success": False, "error": str(error)}
 
-    def move_queued_item_by_id(self, item_id: str, direction: str):
-        """Move a queued item by stable VLC playlist ID and persist the new order."""
+
+    def move_queued_item_by_id(self, queue_id: str, direction: str):
+        """Move a queue entry by independent ID and persist its order."""
         try:
-            item_id = str(item_id)
+            queue_id = str(queue_id)
             if direction not in ("up", "down"):
                 return {"success": False, "error": "Direction must be 'up' or 'down'"}
-            if item_id not in self._queued_items:
+            if queue_id not in self._queued_items:
                 return {"success": False, "error": "That track is no longer queued"}
-
             self._compact_queue_order()
-            ordered_items = sorted(
-                self._queued_items.items(),
-                key=lambda entry: entry[1].get("queue_order", 0),
-            )
-            current_index = next(
-                index for index, entry in enumerate(ordered_items) if entry[0] == item_id
-            )
+            ordered = sorted(self._queued_items.items(), key=lambda entry: entry[1].get("queue_order", 0))
+            current_index = next(index for index, entry in enumerate(ordered) if entry[0] == queue_id)
             target_index = current_index - 1 if direction == "up" else current_index + 1
-            if target_index < 0 or target_index >= len(ordered_items):
+            if target_index < 0 or target_index >= len(ordered):
                 return {"success": False, "error": "That item is already at the queue boundary"}
-
-            _item_id, item_info = ordered_items[current_index]
-            neighbor_id, neighbor_info = ordered_items[target_index]
-            item_info["queue_order"], neighbor_info["queue_order"] = (
-                neighbor_info["queue_order"],
-                item_info["queue_order"],
-            )
+            _, info = ordered[current_index]
+            neighbor_id, neighbor_info = ordered[target_index]
+            info["queue_order"], neighbor_info["queue_order"] = neighbor_info["queue_order"], info["queue_order"]
             self._save_queue_backup()
             return {
                 "success": True,
-                "item_id": item_id,
-                "item_name": item_info.get("item_name", "Unknown"),
-                "queue_order": item_info["queue_order"],
+                "queue_id": queue_id,
+                "item_id": info.get("playlist_item_id", info.get("item_id", queue_id)),
+                "item_name": info.get("item_name", "Unknown"),
+                "queue_order": info["queue_order"],
                 "swapped_with": neighbor_id,
             }
-        except Exception as e:
-            self.logger.error(f"move_queued_item_by_id error: {e}")
-            return {"success": False, "error": str(e)}
+        except Exception as error:
+            self.logger.error("move_queued_item_by_id error: %s", error)
+            return {"success": False, "error": str(error)}
+
 
     def remove_from_queue_by_playlist_number(self, number: int, protected_item_ids=None, protected_uris=None):
-        """Remove a queued item by playlist number and reconcile its VLC entry."""
+        """Remove the queued entry whose VLC reference currently occupies a playlist position."""
         try:
             playlist = self.get_playlist()
             if playlist is None:
                 return {"success": False, "error": "playlist_unavailable"}
             playlist_map, _ = self._parse_playlist_info(playlist)
-            target_id = next(
+            playlist_id = next(
                 (item_id for item_id, info in playlist_map.items() if info.get("position") == int(number)),
                 None,
             )
-            if target_id is None:
+            if playlist_id is None:
                 return {"success": False, "error": f"Playlist number {number} not found"}
-            if target_id not in self._queued_items:
+            queue_id = self._queue_id_for_playlist_item_id(playlist_id)
+            if queue_id is None:
                 return {"success": False, "error": f"Playlist #{number} is not queued"}
-            name = self._queued_items[target_id].get("item_name", playlist_map[target_id]["name"])
-            result = self._reconcile_queued_playlist_items([target_id], protected_item_ids, protected_uris)
-            result.update({"removed_item_id": target_id, "item_name": name})
-            if not result["success"] and result.get("error") is None:
-                result["error"] = "Could not reconcile the VLC playlist entry"
-            return result
-        except Exception as e:
-            self.logger.error(f"remove_from_queue_by_playlist_number error: {e}")
-            return {"success": False, "error": str(e)}
-    
+            return self.remove_from_queue_by_id(queue_id, protected_item_ids, protected_uris)
+        except Exception as error:
+            self.logger.error("remove_from_queue_by_playlist_number error: %s", error)
+            return {"success": False, "error": str(error)}
+
+
     def enqueue_item(self, item_id):
         """Add an item to the end of the playlist"""
         # VLC's enqueue command - adds to end of playlist
@@ -2024,30 +2078,18 @@ class VLCController:
         return self._handle_queued_item_finished(item_id)
 
     def _handle_queued_item_finished(self, item_id):
-        """
-        Handle when a queued item finishes playing (track ends naturally)
-        
-        Note: Shuffle restoration now happens when the LAST item STARTS playing,
-        not when it finishes. This method mainly handles cleanup.
-        
-        Args:
-            item_id: The item ID that just finished playing
-        """
-        if item_id not in self._shuffle_restore_queue:
-            self.logger.debug(f"Item {item_id} finished but was not in shuffle restore queue")
+        """Clean up shuffle restoration bookkeeping for a finished VLC media item."""
+        queue_id = self._queue_id_for_playlist_item_id(item_id)
+        if queue_id is None:
+            # Backups created before queue-entry IDs stored VLC IDs in this list.
+            queue_id = str(item_id) if str(item_id) in self._shuffle_restore_queue else None
+        if queue_id is None or queue_id not in self._shuffle_restore_queue:
+            self.logger.debug("Item %s finished without a shuffle-restore marker", item_id)
             return
-        
-        # Remove from shuffle restore queue since this item finished
-        # (shuffle should have already been restored when the last item started playing)
-        self._shuffle_restore_queue.remove(item_id)
-        self.logger.debug(f"Removed finished item {item_id} from shuffle restore queue")
-        
-        # Note: We no longer restore shuffle here - it happens when the last item starts playing
-        # This prevents the delay between queue finishing and shuffle being restored
-        
-        # Save the updated state
+        self._shuffle_restore_queue.remove(queue_id)
         self._save_queue_backup()
-    
+
+
     def _file_exists_robust(self, path: str) -> bool:
         """Check if a file exists using multiple methods for reliability.
         

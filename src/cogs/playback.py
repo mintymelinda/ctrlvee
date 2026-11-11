@@ -2156,7 +2156,7 @@ class PlaybackCommands(commands.Cog):
             )
             queue_lines = []
             for item_id, info in ordered_queue[:3]:
-                item_name = playlist_names.get(item_id) or info.get("item_name", "Unknown")
+                item_name = info.get("item_name", "Unknown")
                 queue_lines.append(f"**#{info.get('queue_order', '?')}** {item_name}")
             if len(ordered_queue) > 3:
                 queue_lines.append(f"…and {len(ordered_queue) - 3} more")
@@ -3054,16 +3054,21 @@ class PlaybackCommands(commands.Cog):
                             }
                 
                 queue_list = []
-                for item_id, info in queued_items.items():
-                    # Get item details from playlist
-                    if item_id in playlist_map:
-                        item_name = playlist_map[item_id]['name']
-                        playlist_pos = playlist_map[item_id]['position']
-                        queue_list.append(f"• **{item_name}** (playlist #{playlist_pos}, queue #{info['queue_order']})")
+                for queue_id, info in sorted(
+                    queued_items.items(),
+                    key=lambda entry: entry[1].get("queue_order", 0),
+                ):
+                    playlist_item_id = str(info.get("playlist_item_id", info.get("item_id", "")))
+                    if playlist_item_id in playlist_map:
+                        playlist_pos = playlist_map[playlist_item_id]['position']
+                        queue_list.append(
+                            f"• **{info.get('item_name', 'Unknown')}** "
+                            f"(playlist #{playlist_pos}, queue #{info['queue_order']})"
+                        )
                     else:
-                        # Fallback if item not found in current playlist
-                        item_name = info.get('item_name', 'Unknown')
-                        queue_list.append(f"• **{item_name}** (queue #{info['queue_order']})")
+                        queue_list.append(
+                            f"• **{info.get('item_name', 'Unknown')}** (queue #{info['queue_order']})"
+                        )
                 
                 embed.add_field(
                     name="Active Queue Items",
@@ -3645,9 +3650,17 @@ class QueueManageView(discord.ui.View):
         self.total_items = len(self.ordered_items)
         self.page_count = max(1, (self.total_items + self.page_size - 1) // self.page_size)
         self.page = min(max(0, page), self.page_count - 1)
-        self.playlist_names = {
-            item.get("id"): item.get("name", "Unknown")
+        live_names = {
+            str(item.get("id")): item.get("name", "Unknown")
             for item in (playlist.findall(".//leaf") if playlist is not None else [])
+            if item.get("id") is not None
+        }
+        self.playlist_names = {
+            queue_id: live_names.get(
+                str(info.get("playlist_item_id", info.get("item_id", queue_id))),
+                info.get("item_name", "Unknown"),
+            )
+            for queue_id, info in queued_items.items()
         }
         self.queue_orders = {
             item_id: info.get("queue_order", position)
