@@ -22,6 +22,13 @@ class VoiceChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         self.guild.get_channel.return_value = self.channel
         self.bot.guilds = [self.guild]
 
+    def test_uses_shared_voice_lock_for_all_guilds_when_provided(self):
+        shared_lock = asyncio.Lock()
+        service = VoiceChannelService(self.bot, connection_lock=shared_lock)
+
+        self.assertIs(service._lock_for_guild(100), shared_lock)
+        self.assertIs(service._lock_for_guild(200), shared_lock)
+
     async def test_join_channel_connects_and_records_target(self):
         voice_client = Mock()
         voice_client.is_connected.return_value = True
