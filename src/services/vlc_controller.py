@@ -295,13 +295,19 @@ class VLCController:
         """Prefer the soft queue, otherwise advance and capture the selected item."""
         queued_item = self.get_next_queued_item()
         queued_result = self.play_next_queued_item() if queued_item else None
-        if queued_result and queued_result.get("success"):
+        if queued_item:
+            if queued_result and queued_result.get("success"):
+                return {
+                    "queued_result": queued_result,
+                    "next_success": False,
+                    "expected_item_id": str(
+                        queued_result.get("item_id") or queued_item.get("item_id")
+                    ) if queued_result.get("item_id") or queued_item.get("item_id") else None,
+                }
             return {
                 "queued_result": queued_result,
                 "next_success": False,
-                "expected_item_id": str(
-                    queued_result.get("item_id") or queued_item.get("item_id")
-                ) if queued_result.get("item_id") or queued_item.get("item_id") else None,
+                "expected_item_id": None,
             }
         next_result = self.next()
         if not next_result:
