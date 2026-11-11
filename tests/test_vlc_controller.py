@@ -299,6 +299,57 @@ class VLCControllerTests(unittest.TestCase):
         orders = sorted(item["queue_order"] for item in self.controller._queued_items.values())
         self.assertEqual(orders, [1, 2])
 
+    def test_monitor_transition_rejects_stale_state_without_mutating_queue(self):
+        self.queue_item("queued")
+        status = ET.fromstring("<root><state>paused</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="current" current="current"/></playlist>')
+
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ), patch.object(self.controller, "play_next_queued_item") as play:
+            result = self.controller.check_and_handle_queue_transition(
+                "current", expected_state="playing"
+            )
+
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["reason"], "state_changed")
+        self.assertIn("queued", self.controller._queued_items)
+        play.assert_not_called()
+
+    def test_monitor_transition_rejects_stale_item_without_mutating_queue(self):
+        self.queue_item("queued")
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="newer" current="current"/></playlist>')
+
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ), patch.object(self.controller, "play_next_queued_item") as play:
+            result = self.controller.check_and_handle_queue_transition(
+                "old", expected_state="playing"
+            )
+
+        self.assertTrue(result["stale"])
+        self.assertEqual(result["reason"], "current_item_changed")
+        self.assertIn("queued", self.controller._queued_items)
+        play.assert_not_called()
+
+    def test_monitor_transition_bookkeeping_never_starts_queue_playback(self):
+        self.queue_item("queued")
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="natural" current="current"/></playlist>')
+
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ), patch.object(self.controller, "play_next_queued_item") as play:
+            result = self.controller.check_and_handle_queue_transition(
+                "natural", expected_state="playing"
+            )
+
+        self.assertFalse(result["stale"])
+        self.assertEqual(result["transitions"], [])
+        self.assertIn("queued", self.controller._queued_items)
+        play.assert_not_called()
+
     def test_transition_does_not_advance_twice_after_queued_item_starts(self):
         self.queue_item("A")
         self.queue_item("B")

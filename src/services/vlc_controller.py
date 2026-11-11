@@ -1450,105 +1450,109 @@ class VLCController:
             self.logger.error(f"Failed to play queued item: {item_name} (ID: {item_id})")
             return {"success": False, "error": f"Failed to play item {item_id}"}
 
-    def check_and_handle_queue_transition(self, current_item_id):
+    def check_and_handle_queue_transition(
+        self,
+        current_item_id,
+        expected_state=None,
+        finished_item_id=None,
+    ):
+        """Apply monitor bookkeeping only while its observed VLC item is still current.
+
+        Queue playback is deliberately not started here. The monitor uses
+        play_queued_item_if_monitor_state as the sole automatic queue-start
+        operation because it revalidates state, item identity, end position,
+        and queue contents together under the controller lock.
         """
-        Check if we need to handle soft queue transitions and shuffle restoration
-        This should be called from the monitoring system when track changes
-        
-        For soft queue: When a track ends naturally, we need to check if there's
-        a queued item that should play next and trigger it.
-        
-        Args:
-            current_item_id: The ID of the item that just started playing
-            
-        Returns:
-            dict: Information about any queue transitions that occurred
-        """
+        if expected_state is not None:
+            status = self.get_status()
+            if status is None:
+                return {"stale": True, "reason": "status_unavailable", "transitions": []}
+            live_state = status.findtext("state")
+            if live_state != expected_state:
+                return {
+                    "stale": True,
+                    "reason": "state_changed",
+                    "state": live_state,
+                    "transitions": [],
+                }
+
+            playlist = self.get_playlist()
+            if playlist is None:
+                return {"stale": True, "reason": "playlist_unavailable", "transitions": []}
+            live_item, _ = self._current_playlist_item(playlist)
+            live_item_id = live_item.get("id") if live_item is not None else None
+            if str(live_item_id) != str(current_item_id):
+                return {
+                    "stale": True,
+                    "reason": "current_item_changed",
+                    "current_item_id": live_item_id,
+                    "transitions": [],
+                }
+
         transitions = []
 
-        # A successful play command can precede VLC reporting the new current
-        # item. Ignore stale observations so they cannot issue a duplicate play.
+        # A successful queue play can precede VLC reporting the new current
+        # item. Ignore stale observations until the pending item is confirmed.
         if self._pending_queue_item_id is not None:
-            if current_item_id == self._pending_queue_item_id:
+            if str(current_item_id) == str(self._pending_queue_item_id):
                 self.logger.info(
-                    f"VLC confirmed queued item {current_item_id} is now playing"
+                    "VLC confirmed queued item %s is now playing",
+                    current_item_id,
                 )
                 self._pending_queue_item_id = None
                 self._pending_queue_started_at = None
             else:
                 pending_age = (
-                    __import__('time').time() - self._pending_queue_started_at
+                    __import__("time").time() - self._pending_queue_started_at
                     if self._pending_queue_started_at is not None
                     else 0
                 )
                 if pending_age < 30:
                     return {
+                        "stale": False,
+                        "reason": "queue_item_pending",
                         "transitions": transitions,
                         "active_queue_items": len(self._queued_items),
                         "pending_shuffle_restores": len(self._shuffle_restore_queue),
                     }
                 self.logger.warning(
-                    f"Queued item {self._pending_queue_item_id} was not observed "
-                    "within 30 seconds; allowing queue playback to retry"
+                    "Queued item %s was not observed within 30 seconds; "
+                    "allowing queue playback to retry",
+                    self._pending_queue_item_id,
                 )
                 self._pending_queue_item_id = None
                 self._pending_queue_started_at = None
-        
-        # First, check if the current item is one we were tracking
-        # If so, it means it just started playing (either queued or natural progression)
-        current_is_queued = current_item_id in self._queued_items
-        
-        # For soft queue, we need different logic:
-        # 1. If current item is a queued item, remove it from tracking
-        # 2. Check if there are more items in the queue to play
-        
-        if current_is_queued:
-            # This queued item just started playing
-            if current_item_id in self._queued_items:
-                queue_info = self._queued_items[current_item_id]
-                item_name = queue_info.get("item_name", "Unknown")
-                
-                self.logger.info(f"Soft-queued item now playing: {item_name} (ID: {current_item_id})")
-                
-                # Use the centralized removal method
-                self._remove_from_queue(current_item_id)
-                
-                transitions.append({
-                    "action": "queued_item_started",
-                    "item_id": current_item_id,
-                    "item_name": item_name,
-                    "success": True
-                })
-            else:
-                self.logger.debug(f"Queued item {current_item_id} already removed from queue")
-        
-        # Check if we should play the next queued item
-        # This happens when the current track is about to end or has ended
-        next_queued = self.get_next_queued_item()
-        if next_queued and not current_is_queued:
-            # There's a next item to play and current item is not a queued item
-            # This suggests the previous track ended naturally
-            
-            play_result = self.play_next_queued_item()
-            if play_result.get("success"):
-                transitions.append({
-                    "action": "auto_play_next_queued",
-                    "item_id": play_result["item_id"],
-                    "item_name": play_result["item_name"],
-                    "success": True
-                })
-                self.logger.info(f"Automatically playing next queued item: {play_result['item_name']}")
-        
-        # Save backup after any queue state changes (if any transitions occurred)
+
+        if current_item_id in self._queued_items:
+            queue_info = self._queued_items[current_item_id]
+            item_name = queue_info.get("item_name", "Unknown")
+            self.logger.info(
+                "Soft-queued item now playing: %s (ID: %s)",
+                item_name,
+                current_item_id,
+            )
+            self._remove_from_queue(current_item_id)
+            transitions.append({
+                "action": "queued_item_started",
+                "item_id": current_item_id,
+                "item_name": item_name,
+                "success": True,
+            })
+
+        if finished_item_id and str(finished_item_id) != str(current_item_id):
+            self._handle_queued_item_finished(finished_item_id)
+            self.set_rate(1.0)
+
         if transitions:
             self._save_queue_backup()
-        
+
         return {
+            "stale": False,
             "transitions": transitions,
             "active_queue_items": len(self._queued_items),
-            "pending_shuffle_restores": len(self._shuffle_restore_queue)
+            "pending_shuffle_restores": len(self._shuffle_restore_queue),
         }
-    
+
     def get_queue_status(self):
         """Get current queue status information"""
         return {

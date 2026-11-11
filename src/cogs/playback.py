@@ -50,7 +50,7 @@ class PlaybackCommands(commands.Cog):
         self._suppress_auto_announce_until = 0.0
         self._last_announced_item_id = None
         self._last_announced_item_name = None
-        self._command_initiated_change = False  # Suppress auto announce immediately after bot-issued next/prev
+        self._command_initiated_item_id = None  # Suppress only the matching command-selected item
         # Unified announcer cooldown
         self._last_now_playing_key = None
         self._last_now_playing_ts = 0.0
@@ -928,7 +928,13 @@ class PlaybackCommands(commands.Cog):
                     # Check for state changes
                     if self.last_known_state is not None:
                         state_changed = current_state != self.last_known_state
-                        position_changed = current_position != self.last_known_position
+                        previous_item_id = (
+                            self.last_known_playing_item.get("id")
+                            if self.last_known_playing_item is not None
+                            else None
+                        )
+                        current_item_id = current_item.get("id") if current_item is not None else None
+                        position_changed = current_item_id != previous_item_id
                         
                         # Handle queue transitions when track changes OR when state changes to stopped/paused
                         if (position_changed and current_item is not None) or (state_changed and current_state in ['stopped', 'paused']):
@@ -1020,47 +1026,34 @@ class PlaybackCommands(commands.Cog):
                                     except Exception as e:
                                         logger.error(f"Error auto-playing next queued item: {e}")
                             
-                            # Handle normal queue transitions for position changes (only if we didn't intercept)
+                            # Apply queue bookkeeping only if this monitor snapshot is
+                            # still current. This also completes the previous queued item
+                            # under the same controller lock as the identity check.
                             if position_changed and current_item_id:
                                 try:
-                                    # Check for queue transitions and shuffle restoration
-                                    queue_result = await self.vlc.run_async("check_and_handle_queue_transition", current_item_id)
-                                    
-                                    # Log any queue transitions
-                                    if queue_result.get("transitions"):
-                                        for transition in queue_result["transitions"]:
-                                            if transition["action"] == "shuffle_restored":
-                                                logger.info(f"Queue system restored shuffle after item {transition['item_id']} finished")
-                                                
-                                                # Optionally notify in Discord if notification channel is set
-                                                channel_id = getattr(Config, 'WATCH_ANNOUNCE_CHANNEL_ID', 0)
-                                                if channel_id:
-                                                    try:
-                                                        channel = self.bot.get_channel(channel_id) or await self.bot.fetch_channel(channel_id)
-                                                        if channel:
-                                                            await channel.send("Queue finished, shuffle mode restored.")
-                                                    except Exception as e:
-                                                        logger.error(f"Failed to send shuffle restored notification: {e}")
-                                    
+                                    last_item_id = (
+                                        self.last_known_playing_item.get("id")
+                                        if self.last_known_playing_item is not None
+                                        else None
+                                    )
+                                    queue_result = await self.vlc.run_async(
+                                        "check_and_handle_queue_transition",
+                                        current_item_id,
+                                        expected_state=current_state,
+                                        finished_item_id=last_item_id,
+                                    )
+                                    if queue_result.get("stale"):
+                                        logger.debug(
+                                            "Discarding stale monitor transition (%s); "
+                                            "VLC now reports item %s",
+                                            queue_result.get("reason"),
+                                            queue_result.get("current_item_id"),
+                                        )
+                                        await asyncio.sleep(0.5)
+                                        continue
                                 except Exception as e:
                                     logger.error(f"Error handling queue transition: {e}")
-                            
-                            # Detect when the last playing item finished (for shuffle restoration)
-                            if position_changed and self.last_known_playing_item:
-                                last_item_id = self.last_known_playing_item.get('id')
-                                if last_item_id and last_item_id != current_item_id:
-                                    # The last playing item is no longer playing - it finished
-                                    try:
-                                        await self.vlc.run_async("finish_queued_item", last_item_id)
-                                        # Ensure playback rate is reset to normal after an item finishes
-                                        try:
-                                            await self.vlc.run_async("set_rate", 1.0)
-                                            logger.debug("Playback rate reset to 1.0 after item finished")
-                                        except Exception as e:
-                                            logger.debug(f"Failed to reset playback rate after finish: {e}")
-                                    except Exception as e:
-                                        logger.error(f"Error handling finished item {last_item_id}: {e}")
-                        
+
                         if state_changed or position_changed:
                             # Get item name if available
                             item_name = None
@@ -1084,11 +1077,17 @@ class PlaybackCommands(commands.Cog):
                             # Only send Discord message if a notification channel is configured
                             channel_ids = Config.get_announce_channel_ids()
                             now_ts = asyncio.get_event_loop().time()
-                            # If the bot itself initiated the change, suppress one-time auto announce and clear the flag
-                            if self._command_initiated_change:
-                                self.logger.debug("Auto announce suppressed: command-initiated change")
-                                self._command_initiated_change = False
-                                continue
+                            # Suppress only the item selected by the command. If a
+                            # different item won the race, let that real transition announce.
+                            if position_changed and self._command_initiated_item_id is not None:
+                                expected_item_id = self._command_initiated_item_id
+                                self._command_initiated_item_id = None
+                                if str(current_item_id) == str(expected_item_id):
+                                    self.logger.debug(
+                                        "Auto announce suppressed for command-selected item %s",
+                                        expected_item_id,
+                                    )
+                                    continue
                             # Hard suppression: if we just sent a command-driven Now Playing, skip auto announce entirely (short window)
                             if position_changed and (now_ts - self._last_command_announce_ts) < self._auto_suppress_seconds:
                                 self.logger.debug("Auto announce suppressed: recent command-driven Now Playing")
@@ -2040,7 +2039,7 @@ class PlaybackCommands(commands.Cog):
             item_id = selection["item_id"]
 
             if selection["success"]:
-                self._seat_playback_owner(ctx.author, item_id)
+                self._command_initiated_item_id = str(item_id)
                 logger.info(f"Loading playlist item #{number}")
                 await ctx.send(f'Loading item #{number}...')
                 await asyncio.sleep(3)  # Give VLC time to load and start playing the file
@@ -2082,7 +2081,14 @@ class PlaybackCommands(commands.Cog):
                         )
                         return
 
-                # Announce now playing via unified announcer
+                if recovery.get("state") != "playing":
+                    await ctx.send(
+                        "VLC accepted the selection, but playback could not be confirmed."
+                    )
+                    return
+
+                self._seat_playback_owner(ctx.author, item_id)
+                # Announce only after the selected item has been confirmed playing.
                 await self._announce_now_playing('command', item, number)
                 
                 # Verify it's actually playing
@@ -2188,6 +2194,10 @@ class PlaybackCommands(commands.Cog):
 
         # Resolve the queue and issue the selected playback command atomically.
         decision = await self.vlc.run_async("play_next_or_advance")
+        expected_item_id = decision.get("expected_item_id")
+        self._command_initiated_item_id = (
+            str(expected_item_id) if expected_item_id is not None else None
+        )
         queued_result = decision.get("queued_result")
         if queued_result and not queued_result.get("success"):
             await ctx.send(f"Error playing queued item: {queued_result.get('error', 'Unknown error')}")
@@ -2226,6 +2236,10 @@ class PlaybackCommands(commands.Cog):
             return
 
         decision = await self.vlc.run_async("previous_and_capture")
+        expected_item_id = decision.get("expected_item_id")
+        self._command_initiated_item_id = (
+            str(expected_item_id) if expected_item_id is not None else None
+        )
         if decision.get("success"):
             logger.info("Loading previous track")
             await ctx.send('Loading previous track...')
