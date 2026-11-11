@@ -19,6 +19,14 @@ class VoiceChannelService:
             return None
         return guild.get_channel(channel_id)
 
+    def get_any_target_channel(self):
+        """Return a cached command-selected channel for the background reconnect guard."""
+        for guild in getattr(self.bot, "guilds", ()):
+            channel = self.get_target_channel(guild)
+            if channel is not None:
+                return channel
+        return None
+
     async def join_member_channel(self, member) -> tuple[bool, str]:
         """Join the invoking member's current voice channel."""
         guild = getattr(member, "guild", None)
