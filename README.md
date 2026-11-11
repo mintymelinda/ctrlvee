@@ -219,6 +219,17 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 - `!speed <rate|preset>`
 - `!speedstatus`
 
+### Stream manager / screen sharing
+
+- `!stream_manager set @member` — appoint the person coordinating the stream session and receiving operational alerts
+- `!stream_host set @member` — appoint the person running VLC and sharing their screen; this can be a different person from the stream manager
+- `!stream_manager status` — show both assignments and whether the stream host is sharing in the session voice channel
+- `!stream_host status` — show the stream host and current share state
+- `!stream_host clear` — clear the separate host assignment and use the stream manager as the host again
+- `!stream_manager clear` — remove both assignments
+- Assignments are per server and persist in `data/stream_managers.json`. When VLC starts playing, CtrlVee pings the manager and host if the host is not sharing; it also pings them if the host's share stops while playback continues. Alerts are deduplicated until sharing resumes or playback stops.
+- The assigned person must start or restore screen sharing in the Discord client; the bot detects share state and sends reminders but cannot initiate Go Live.
+
 ### Playlist
 
 - `!list`

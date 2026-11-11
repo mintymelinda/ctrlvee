@@ -265,6 +265,7 @@ from src.cogs.playlist import PlaylistCommands
 from src.cogs.scheduler import Scheduler
 from src.cogs.watch import WatchCommands
 from src.cogs.stats import StatsCommands
+from src.cogs.stream_manager import StreamManagerCommands
 from src.version import __version__
 from changelog_helper import parse_changelog
 
@@ -629,6 +630,7 @@ async def setup_hook():
         await bot.add_cog(PlaylistCommands(bot, vlc, tmdb_service, watch_service))
         await bot.add_cog(Scheduler(bot, vlc))
         await bot.add_cog(WatchCommands(bot, watch_service, vlc))
+        await bot.add_cog(StreamManagerCommands(bot, vlc))
         if Config.ENABLE_WATCH_STATS:
             await bot.add_cog(StatsCommands(bot, vlc, stats_service))
             logger.info('Watch statistics enabled')
