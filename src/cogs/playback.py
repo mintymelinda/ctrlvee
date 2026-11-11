@@ -956,6 +956,29 @@ class PlaybackCommands(commands.Cog):
     async def _monitor_vlc_state(self):
         """Background task to monitor VLC state changes"""
         await self.bot.wait_until_ready()
+        try:
+            restored_queue = await self.vlc.run_async("reconcile_queue_with_playlist")
+            if restored_queue.get("success"):
+                removed_ids = restored_queue.get("removed_item_ids", [])
+                if removed_ids:
+                    self.logger.info(
+                        "Removed %s stale soft-queue item(s) during startup: %s",
+                        len(removed_ids),
+                        ", ".join(removed_ids),
+                    )
+                else:
+                    self.logger.info(
+                        "Restored %s soft-queue item(s) from persistent backup",
+                        restored_queue.get("remaining", 0),
+                    )
+            else:
+                self.logger.warning(
+                    "Soft queue startup reconciliation deferred: %s",
+                    restored_queue.get("reason", "unknown error"),
+                )
+        except Exception:
+            self.logger.exception("Soft queue startup reconciliation failed; saved queue was retained")
+
         while not self.bot.is_closed():
             try:
                 status, playlist = await self.vlc.run_async("get_playback_snapshot")
