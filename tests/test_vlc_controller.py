@@ -935,6 +935,40 @@ class VLCControllerTests(unittest.TestCase):
         self.assertFalse(result["next_success"])
         next_track.assert_not_called()
 
+    def test_play_next_or_advance_does_not_bypass_a_failed_queue_entry(self):
+        queued_item = {
+            "queue_id": "queue-entry",
+            "item_id": None,
+            "playlist_item_id": None,
+            "item_name": "Unresolved media",
+        }
+        failed = {"success": False, "error": "Queued media has no VLC playlist reference"}
+        with patch.object(self.controller, "get_next_queued_item", return_value=queued_item), patch.object(
+            self.controller, "play_next_queued_item", return_value=failed
+        ), patch.object(self.controller, "next") as next_track:
+            result = self.controller.play_next_or_advance()
+
+        self.assertFalse(result["next_success"])
+        self.assertEqual(result["queued_result"], failed)
+        next_track.assert_not_called()
+
+    def test_queue_transition_resolves_independent_queue_id_from_vlc_item_id(self):
+        self.controller._queued_items = {
+            "queue-entry": {
+                "queue_id": "queue-entry",
+                "playlist_item_id": "vlc-item",
+                "item_id": "vlc-item",
+                "item_name": "Queued media",
+                "queue_order": 1,
+                "restore_shuffle": False,
+            }
+        }
+        result = self.controller.check_and_handle_queue_transition("vlc-item")
+
+        self.assertEqual(result["transitions"][0]["queue_id"], "queue-entry")
+        self.assertEqual(result["transitions"][0]["item_id"], "vlc-item")
+        self.assertNotIn("queue-entry", self.controller._queued_items)
+
     def test_play_next_or_advance_captures_current_item_after_fallback(self):
         playlist = ET.fromstring('<playlist><leaf id="old"/><leaf id="new" current="current"/></playlist>')
         with patch.object(self.controller, "get_next_queued_item", return_value=None), patch.object(
