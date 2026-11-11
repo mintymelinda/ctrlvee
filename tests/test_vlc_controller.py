@@ -514,6 +514,22 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["removed_item_id"], "A")
         delete.assert_called_once_with("A")
         self.assertEqual(self.controller._queued_items["B"]["queue_order"], 1)
+        self.assertEqual(self.controller._queued_items["B"]["restore_shuffle"], True)
+        self.assertEqual(self.controller._shuffle_restore_queue, ["B"])
+
+    def test_removing_final_shuffle_managed_item_restores_shuffle(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": True}
+        }
+        playlist = ET.fromstring('<playlist><leaf id="queued" name="Queued"/></playlist>')
+        with patch.object(self.controller, "get_playlist", side_effect=[playlist, ET.fromstring("<playlist />")]), patch.object(
+            self.controller, "delete_playlist_item", return_value=True
+        ), patch.object(self.controller, "restore_shuffle_if_needed", return_value=True) as restore:
+            result = self.controller.remove_from_queue_by_id("queued")
+
+        self.assertTrue(result["success"])
+        restore.assert_called_once_with(True)
+        self.assertEqual(self.controller._queued_items, {})
         self.assertEqual(self.controller._shuffle_restore_queue, [])
 
     def test_remove_preserves_current_playlist_item(self):
