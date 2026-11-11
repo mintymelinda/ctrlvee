@@ -845,6 +845,69 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("VOICE_JOIN_CHANNEL_ID", reason)
 
 
+    def test_playback_panel_has_three_rows_with_compact_management_menu(self):
+        view = PlaybackControlView(Mock())
+        buttons_by_row = {
+            row: [
+                child for child in view.children
+                if isinstance(child, discord.ui.Button) and child.row == row
+            ]
+            for row in range(3)
+        }
+        management = [
+            child for child in view.children
+            if isinstance(child, discord.ui.Select)
+        ]
+
+        self.assertEqual(len(buttons_by_row[0]), 5)
+        self.assertEqual(
+            {button.label for button in buttons_by_row[0]},
+            {"Previous", "Play", "Pause", "Stop", "Next"},
+        )
+        self.assertEqual(len(buttons_by_row[1]), 4)
+        self.assertEqual(
+            {button.label for button in buttons_by_row[1]},
+            {"Rewind 10s", "Forward 10s", "Rewind 30s", "Forward 30s"},
+        )
+        self.assertEqual(len(buttons_by_row[2]), 0)
+        self.assertEqual(len(management), 1)
+        self.assertEqual(
+            {option.value for option in management[0].options},
+            {"view_queue", "manage_queue", "add_to_queue", "shuffle", "advanced"},
+        )
+        self.assertEqual(management[0].custom_id, "ctrlvee:panel:management")
+        self.assertTrue(view.is_persistent())
+
+    async def test_management_menu_dispatches_selected_action(self):
+        view = PlaybackControlView(Mock())
+        select = next(child for child in view.children if isinstance(child, discord.ui.Select))
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(send_message=AsyncMock())
+        )
+        view._dispatch = AsyncMock()
+
+        select._values = ["shuffle"]
+        await select.callback(interaction)
+
+        view._dispatch.assert_awaited_once_with(interaction, "shuffle_toggle")
+
+    async def test_management_menu_routes_queue_tools_to_existing_handlers(self):
+        view = PlaybackControlView(Mock())
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(send_message=AsyncMock())
+        )
+        view.manage_queue_button = AsyncMock()
+        view.add_to_queue_button = AsyncMock()
+        view.advanced_options_button = AsyncMock()
+
+        await view._handle_management_action(interaction, "manage_queue")
+        await view._handle_management_action(interaction, "add_to_queue")
+        await view._handle_management_action(interaction, "advanced")
+
+        view.manage_queue_button.assert_awaited_once_with(interaction, None)
+        view.add_to_queue_button.assert_awaited_once_with(interaction, None)
+        view.advanced_options_button.assert_awaited_once_with(interaction, None)
+
     def test_playlist_picker_pages_every_playlist_item(self):
         playlist_items = [
             {"id": str(index), "name": f"Video {index}"}
