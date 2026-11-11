@@ -880,7 +880,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view.page, 1)
         self.assertEqual(
             {child.label for child in view.children if isinstance(child, discord.ui.Button)},
-            {"Previous", "Page 2/2", "Next"},
+            {"Previous", "Page 2/2", "Next", "Search"},
         )
         self.assertTrue(view.next_button.disabled)
         interaction.response.edit_message.assert_awaited_once()
