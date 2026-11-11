@@ -2014,9 +2014,9 @@ class PlaybackCommands(commands.Cog):
                 if getattr(getattr(message, "author", None), "id", None) != getattr(self.bot.user, "id", None):
                     continue
                 embeds = getattr(message, "embeds", ())
-                if not embeds or not str(getattr(embeds[0], "footer", {}).text or "").startswith(
-                    "Video playback controls and queue overview."
-                ):
+                footer = getattr(embeds[0], "footer", None) if embeds else None
+                footer_text = getattr(footer, "text", "") or ""
+                if not footer_text.startswith("Video playback controls and queue overview."):
                     continue
                 restored[message_id] = message
             except (KeyError, TypeError, ValueError, discord.NotFound, discord.Forbidden):
