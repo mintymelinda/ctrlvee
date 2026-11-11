@@ -170,7 +170,7 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 
 ### Playback
 
-- `!panel` — post an interactive playback panel with Previous, Play, Pause, Stop, Next, and Restart buttons (available to configured playback roles)
+- `!panel` — post an interactive playback panel with Previous, Play, Pause, Stop, Next, Restart, Toggle Shuffle, and View Queue buttons; the panel summarizes shuffle state and the first three soft-queue entries (available to configured playback roles)
 - `!play`, `!pause`, `!stop`, `!restart`
 - `!next`, `!previous`
 - `!rewind [seconds]`, `!forward [seconds]`
