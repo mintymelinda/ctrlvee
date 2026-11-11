@@ -207,7 +207,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
     def wait_for_current_uri(self, media_uri):
         return self.wait_for(
-            lambda: item
+            lambda: item.get("id")
             if (playlist := self.controller.get_playlist()) is not None
             and (item := next(
                 (leaf for leaf in playlist.findall(".//leaf")
