@@ -4,7 +4,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
 from src.config import Config
-from src.cogs.playback import PlaybackCommands, _decide_playback_allow, _member_has_allowed_role
+from src.cogs.playback import (
+    PlaybackCommands,
+    PlaybackControlView,
+    _decide_playback_allow,
+    _member_has_allowed_role,
+)
 
 
 class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
@@ -17,6 +22,43 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_member_has_allowed_role(member, [43]))
         self.assertTrue(_member_has_allowed_role(member, ["42"]))
         self.assertFalse(_member_has_allowed_role(member, ["Admin"]))
+
+    def test_playback_panel_exposes_queue_and_shuffle_buttons(self):
+        view = PlaybackControlView(Mock())
+        labels = {button.label for button in view.children}
+        self.assertTrue({"Previous", "Play", "Pause", "Stop", "Next", "Restart"}.issubset(labels))
+        self.assertTrue({"Toggle Shuffle", "View Queue"}.issubset(labels))
+
+    async def test_playback_panel_embed_summarizes_soft_queue_and_shuffle(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring(
+            '<playlist><leaf id="1" name="Current" current="current"/>'
+            '<leaf id="2" name="Queued Track"/></playlist>'
+        )
+        queue = {
+            "queued_items": {
+                "2": {"queue_order": 1, "item_name": "Queued Track"},
+            },
+            "shuffle_currently_on": True,
+        }
+        cog.vlc = SimpleNamespace(
+            run_async=AsyncMock(side_effect=[
+                (status, playlist),
+                (queue, playlist),
+            ])
+        )
+
+        embed = await PlaybackCommands._playback_panel_embed(cog)
+        fields = {field.name: field.value for field in embed.fields}
+        self.assertEqual(fields["State"], "Playing")
+        self.assertEqual(fields["Now Playing"], "Current")
+        self.assertEqual(fields["Shuffle"], "Enabled")
+        self.assertEqual(fields["Soft Queue (1)"], "**#1** Queued Track")
+        cog.vlc.run_async.assert_has_awaits([
+            call("get_playback_snapshot"),
+            call("get_queue_snapshot"),
+        ])
 
     def test_pure_guard_allows_when_no_room_is_configured(self):
         self.assertEqual(_decide_playback_allow(False, True, 1, None, False, False), (True, ""))

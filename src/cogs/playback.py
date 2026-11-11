@@ -1951,9 +1951,38 @@ class PlaybackCommands(commands.Cog):
                 value=(current_item.get("name") if current_item is not None else "Nothing"),
                 inline=False,
             )
+            try:
+                queue_status, queue_playlist = await self.vlc.run_async("get_queue_snapshot")
+                queued_items = queue_status.get("queued_items", {})
+                embed.add_field(
+                    name="Shuffle",
+                    value="Enabled" if queue_status.get("shuffle_currently_on") else "Disabled",
+                    inline=True,
+                )
+                playlist_names = {
+                    item.get("id"): item.get("name", "Unknown")
+                    for item in (queue_playlist.findall(".//leaf") if queue_playlist is not None else [])
+                }
+                ordered_queue = sorted(
+                    queued_items.items(),
+                    key=lambda entry: entry[1].get("queue_order", 0),
+                )
+                queue_lines = []
+                for item_id, info in ordered_queue[:3]:
+                    item_name = playlist_names.get(item_id) or info.get("item_name", "Unknown")
+                    queue_lines.append(f"**#{info.get('queue_order', '?')}** {item_name}")
+                if len(ordered_queue) > 3:
+                    queue_lines.append(f"…and {len(ordered_queue) - 3} more")
+                embed.add_field(
+                    name=f"Soft Queue ({len(ordered_queue)})",
+                    value="\n".join(queue_lines) if queue_lines else "No queued items",
+                    inline=False,
+                )
+            except Exception:
+                embed.add_field(name="Queue / Shuffle", value="Currently unavailable", inline=False)
         except Exception:
             embed.description = "VLC status is currently unavailable."
-        embed.set_footer(text="Use the buttons below to control playback.")
+        embed.set_footer(text="Playback, queue, and shuffle controls. Queue details are private to the button user.")
         return embed
 
     @commands.command(name="panel", aliases=["playback_panel"])
@@ -3071,4 +3100,12 @@ class PlaybackControlView(discord.ui.View):
     @discord.ui.button(label="Restart", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
     async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "restart")
+
+    @discord.ui.button(label="Toggle Shuffle", emoji="🔀", style=discord.ButtonStyle.primary, row=1)
+    async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "shuffle_toggle")
+
+    @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
+    async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "queue_status")
 
