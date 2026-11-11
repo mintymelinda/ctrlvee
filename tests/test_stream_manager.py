@@ -38,18 +38,31 @@ class StreamManagerPersistenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "stream_managers.json"
             cog = StreamManagerCommands(SimpleNamespace(), SimpleNamespace(), path)
-            cog.assignments["456"] = {"user_id": 789, "channel_id": 321}
+            cog.assignments["456"] = {"user_id": 789, "host_user_id": 790, "channel_id": 321}
             cog._save_assignments()
 
             restored = StreamManagerCommands(SimpleNamespace(), SimpleNamespace(), path)
 
             self.assertEqual(
                 restored.assignments,
-                {"456": {"user_id": 789, "channel_id": 321}},
+                {"456": {"user_id": 789, "host_user_id": 790, "channel_id": 321}},
             )
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
                 {"456": {"user_id": 789, "channel_id": 321}},
+            )
+
+    def test_legacy_assignment_defaults_host_to_manager(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy.json"
+            path.write_text(
+                json.dumps({"456": {"user_id": 789, "channel_id": 321}}),
+                encoding="utf-8",
+            )
+            restored = StreamManagerCommands(SimpleNamespace(), SimpleNamespace(), path)
+            self.assertEqual(
+                restored.assignments["456"],
+                {"user_id": 789, "host_user_id": 789, "channel_id": 321},
             )
 
     def test_missing_registry_starts_empty(self):
