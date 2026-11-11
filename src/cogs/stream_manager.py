@@ -48,7 +48,7 @@ class StreamManagerCommands(commands.Cog):
             with self.registry_path.open("r", encoding="utf-8") as handle:
                 data = json.load(handle)
             return {
-                str(guild_id): {"user_id": int(value["user_id"]), "channel_id": int(value["channel_id"])}
+                str(guild_id): {"user_id": int(value["user_id"]), "host_user_id": int(value.get("host_user_id", value["user_id"])), "channel_id": int(value["channel_id"])}
                 for guild_id, value in data.items()
                 if isinstance(value, dict) and value.get("user_id") and value.get("channel_id")
             } if isinstance(data, dict) else {}
@@ -97,21 +97,31 @@ class StreamManagerCommands(commands.Cog):
         assignment = self._assignment(guild)
         if not assignment:
             return
-        member = guild.get_member(assignment["user_id"])
-        if member is None:
+        manager = guild.get_member(assignment["user_id"])
+        host_id = assignment.get("host_user_id", assignment["user_id"])
+        host = guild.get_member(host_id)
+        if manager is None:
             try:
-                member = await guild.fetch_member(assignment["user_id"])
+                manager = await guild.fetch_member(assignment["user_id"])
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 logger.warning("Assigned stream manager %s is unavailable in guild %s", assignment["user_id"], guild.id)
-                self._alerted_guilds.add(guild.id)
-                return
+        if host is None:
+            try:
+                host = await guild.fetch_member(host_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.warning("Assigned stream host %s is unavailable in guild %s", host_id, guild.id)
+        recipients = [person for person in (manager, host) if person is not None]
+        if not recipients:
+            self._alerted_guilds.add(guild.id)
+            return
         channel = await self._notification_channel(guild, assignment)
         if channel is None:
             logger.warning("No notification channel available for stream manager in guild %s", guild.id)
             return
+        mentions = " ".join(dict.fromkeys(person.mention for person in recipients))
         await channel.send(
-            f"{member.mention} {reason}",
-            allowed_mentions=discord.AllowedMentions(users=[member], roles=False, everyone=False),
+            f"{mentions} {reason}",
+            allowed_mentions=discord.AllowedMentions(users=recipients, roles=False, everyone=False),
         )
         self._alerted_guilds.add(guild.id)
 
@@ -132,17 +142,18 @@ class StreamManagerCommands(commands.Cog):
             return
 
         self._playing_guilds.add(guild.id)
-        manager = guild.get_member(assignment["user_id"])
-        if manager is None:
+        host_id = assignment.get("host_user_id", assignment["user_id"])
+        host = guild.get_member(host_id)
+        if host is None:
             try:
-                manager = await guild.fetch_member(assignment["user_id"])
+                host = await guild.fetch_member(host_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 if guild.id not in self._alerted_guilds:
-                    await self._notify(guild, "VLC is playing, but your assigned stream manager account is unavailable. Please check the assignment.")
+                    await self._notify(guild, "VLC is playing, but the assigned stream host is unavailable. Please check the stream-host assignment.")
                 return
 
         channel = self._voice_channel(guild)
-        sharing = member_is_sharing_in_channel(manager, channel)
+        sharing = member_is_sharing_in_channel(host, channel)
         if not sharing and guild.id not in self._alerted_guilds:
             await self._notify(
                 guild,
@@ -169,7 +180,8 @@ class StreamManagerCommands(commands.Cog):
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
         assignment = self._assignment(member.guild)
-        if not assignment or member.id != assignment["user_id"]:
+        host_id = assignment.get("host_user_id", assignment["user_id"]) if assignment else None
+        if not assignment or member.id != host_id:
             return
         if member.guild.id not in self._playing_guilds:
             return
@@ -191,8 +203,70 @@ class StreamManagerCommands(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         assignment = self._assignment(member.guild)
-        if assignment and member.id == assignment["user_id"]:
+        host_id = assignment.get("host_user_id", assignment["user_id"]) if assignment else None
+        if assignment and member.id in {assignment["user_id"], host_id}:
             self._alerted_guilds.discard(member.guild.id)
+
+
+    @commands.command(name="stream_host", aliases=["streamhost"])
+    @commands.guild_only()
+    async def stream_host(self, ctx, action: str = "status", member: discord.Member = None):
+        """Assign the human who runs VLC and shares the screen."""
+        if not self._authorized(ctx.author):
+            await ctx.send("You do not have permission to manage the stream host assignment.")
+            return
+        action = action.lower()
+        key = str(ctx.guild.id)
+        assignment = self.assignments.get(key)
+        if action in {"set", "assign"}:
+            if member is None:
+                await ctx.send(f"Usage: {Config.DISCORD_COMMAND_PREFIX}stream_host set @member")
+                return
+            if member.bot:
+                await ctx.send("The stream host must be a human Discord user.")
+                return
+            if assignment is None:
+                await ctx.send("Assign a stream manager first with !stream_manager set @member.")
+                return
+            assignment["host_user_id"] = member.id
+            self._alerted_guilds.discard(ctx.guild.id)
+            try:
+                self._save_assignments()
+            except OSError:
+                logger.exception("Could not persist stream-host assignment")
+                await ctx.send("I could not save the stream-host assignment.")
+                return
+            await ctx.send(
+                f"{member.mention} is now the assigned stream host. I'll monitor their screen share.",
+                allowed_mentions=discord.AllowedMentions(users=[member], roles=False, everyone=False),
+            )
+            return
+        if action in {"clear", "remove", "unset"}:
+            if assignment is not None:
+                assignment["host_user_id"] = assignment["user_id"]
+            self._alerted_guilds.discard(ctx.guild.id)
+            try:
+                self._save_assignments()
+            except OSError:
+                logger.exception("Could not clear stream-host assignment")
+                await ctx.send("I could not save the stream-host change.")
+                return
+            await ctx.send("The separate stream-host assignment has been cleared; the stream manager will be used as the host.")
+            return
+        if action != "status":
+            await ctx.send(f"Usage: {Config.DISCORD_COMMAND_PREFIX}stream_host [set @member|clear|status]")
+            return
+        if assignment is None:
+            await ctx.send("No stream manager is assigned.")
+            return
+        host_id = assignment.get("host_user_id", assignment["user_id"])
+        host = ctx.guild.get_member(host_id)
+        label = host.mention if host else f"User ID {host_id} (not currently in this server)"
+        sharing = member_is_sharing_in_channel(host, self._voice_channel(ctx.guild)) if host else False
+        await ctx.send(
+            f"**Stream host:** {label}\n"
+            f"**Screen share:** {'Active' if sharing else 'Not sharing in the session voice channel'}"
+        )
 
     @commands.command(name="stream_manager", aliases=["streammanager"])
     @commands.guild_only()
@@ -242,10 +316,14 @@ class StreamManagerCommands(commands.Cog):
         if not assignment:
             await ctx.send("No stream manager is assigned. Use `!stream_manager set @member`.")
             return
-        assigned = ctx.guild.get_member(assignment["user_id"])
-        label = assigned.mention if assigned else f"User ID {assignment['user_id']} (not currently in this server)"
-        sharing = member_is_sharing_in_channel(assigned, self._voice_channel(ctx.guild)) if assigned else False
+        manager = ctx.guild.get_member(assignment["user_id"])
+        host_id = assignment.get("host_user_id", assignment["user_id"])
+        host = ctx.guild.get_member(host_id)
+        manager_label = manager.mention if manager else f"User ID {assignment['user_id']} (not currently in this server)"
+        host_label = host.mention if host else f"User ID {host_id} (not currently in this server)"
+        sharing = member_is_sharing_in_channel(host, self._voice_channel(ctx.guild)) if host else False
         await ctx.send(
-            f"**Stream manager:** {label}\n"
+            f"**Stream manager:** {manager_label}\n"
+            f"**Stream host:** {host_label}\n"
             f"**Screen share:** {'Active' if sharing else 'Not sharing in the session voice channel'}"
         )
