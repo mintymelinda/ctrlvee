@@ -58,7 +58,6 @@ class RealVLCIntegrationTests(unittest.TestCase):
                 "--no-one-instance",
                 "--no-media-library",
                 "--ignore-config",
-                "--quiet",
             ],
             stdin=subprocess.DEVNULL,
             stdout=cls.log_file,
@@ -124,6 +123,17 @@ class RealVLCIntegrationTests(unittest.TestCase):
         if temp_dir is not None:
             temp_dir.cleanup()
 
+    def vlc_diagnostics(self):
+        """Include server liveness and recent VLC output when HTTP calls fail."""
+        self.log_file.flush()
+        self.log_file.seek(0, os.SEEK_END)
+        size = self.log_file.tell()
+        self.log_file.seek(max(0, size - 16000))
+        return (
+            f"VLC process exit: {self.process.poll()}\\n"
+            f"Recent VLC output:\\n{self.log_file.read()}"
+        )
+
     def wait_for(self, predicate, description, timeout=12):
         deadline = time.monotonic() + timeout
         last_value = None
@@ -132,7 +142,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             if last_value:
                 return last_value
             time.sleep(0.25)
-        self.fail(f"Timed out waiting for {description}; last value: {last_value!r}")
+        self.fail(f"Timed out waiting for {description}; last value: {last_value!r}\\n{self.vlc_diagnostics()}")
 
     def load_playlist(self):
         """Reset VLC and enqueue fixtures, waiting for each playlist mutation."""
@@ -356,7 +366,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             )
 
         results = asyncio.run(issue_commands())
-        self.assertTrue(all(result is not None for result in results))
+        self.assertTrue(\n            all(result is not None for result in results),\n            f"Serialized VLC command results: {results!r}\\n{self.vlc_diagnostics()}",\n        )
         self.wait_for_current_item(second_id)
         final_status = self.wait_for(
             lambda: status
@@ -370,7 +380,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
     def test_real_vlc_enqueue_play_pause_seek_resume_and_stop(self):
         initial_status = self.controller.get_status()
-        self.assertIsNotNone(initial_status, "Controller could not read VLC status")
+        self.assertIsNotNone(\n            initial_status,\n            f"Controller could not read VLC status\\n{self.vlc_diagnostics()}",\n        )
         self.assertTrue(self.controller.enqueue_path(str(self.media_path)))
 
         def playlist_with_item():
