@@ -1,4 +1,6 @@
 import unittest
+
+import discord
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
@@ -241,22 +243,19 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_playback_panel_embed_summarizes_soft_queue_and_shuffle(self):
         cog = PlaybackCommands.__new__(PlaybackCommands)
-        status = ET.fromstring("<root><state>playing</state></root>")
-        playlist = ET.fromstring(
-            '<playlist><leaf id="1" name="Current" current="current"/>'
-            '<leaf id="2" name="Queued Track"/></playlist>'
-        )
+        status_embed = discord.Embed(title="Now Playing: Current")
+        status_embed.add_field(name="State", value="Playing")
+        status_embed.add_field(name="Now Playing", value="Current")
+        cog.get_status_embed = AsyncMock(return_value=status_embed)
         queue = {
             "queued_items": {
                 "2": {"queue_order": 1, "item_name": "Queued Track"},
             },
             "shuffle_currently_on": True,
         }
+        playlist = ET.fromstring("<playlist />")
         cog.vlc = SimpleNamespace(
-            run_async=AsyncMock(side_effect=[
-                (status, playlist),
-                (queue, playlist),
-            ])
+            run_async=AsyncMock(return_value=(queue, playlist))
         )
 
         embed = await PlaybackCommands._playback_panel_embed(cog)
@@ -265,10 +264,8 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields["Now Playing"], "Current")
         self.assertEqual(fields["Shuffle"], "Enabled")
         self.assertEqual(fields["Soft Queue (1)"], "**#1** Queued Track")
-        cog.vlc.run_async.assert_has_awaits([
-            call("get_playback_snapshot"),
-            call("get_queue_snapshot"),
-        ])
+        cog.get_status_embed.assert_awaited_once_with()
+        cog.vlc.run_async.assert_awaited_once_with("get_queue_snapshot")
 
     def test_pure_guard_allows_when_no_room_is_configured(self):
         self.assertEqual(_decide_playback_allow(False, True, 1, None, False, False), (True, ""))
