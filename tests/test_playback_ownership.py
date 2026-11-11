@@ -337,8 +337,10 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
                     else select_type(playback_view, tracks)
                 )
                 select._values = [value]
-                await select.callback(Mock())
+                interaction = Mock()
+                await select.callback(interaction)
                 playback_view._dispatch.assert_awaited_once_with(
+                    interaction,
                     command,
                     *args,
                     refresh_panel=False,
