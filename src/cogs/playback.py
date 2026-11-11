@@ -3262,6 +3262,15 @@ class QueueClearConfirmView(discord.ui.View):
         super().__init__(timeout=30)
         self.cog = cog
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
     async def confirm_clear(self, interaction: discord.Interaction):
         allowed, reason = await self.cog._playback_guard(
             interaction.user,
