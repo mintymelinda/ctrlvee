@@ -8,6 +8,7 @@ from src.cogs.playback import (
     PlaybackCommands,
     PlaybackControlView,
     QueuePlaylistSelect,
+    QueueManageView,
     _decide_playback_allow,
     _member_has_allowed_role,
 )
@@ -33,6 +34,69 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     def test_playback_panel_exposes_add_to_queue_button(self):
         view = PlaybackControlView(Mock())
         self.assertIn("Add to Queue", {button.label for button in view.children})
+
+    def test_playback_panel_exposes_manage_queue_button(self):
+        view = PlaybackControlView(Mock())
+        self.assertIn("Manage Queue", {button.label for button in view.children})
+
+    def test_queue_manager_preserves_queue_order_and_exposes_mutations(self):
+        queue_status = {
+            "queued_items": {
+                "third": {"queue_order": 3, "item_name": "Third"},
+                "first": {"queue_order": 1, "item_name": "First"},
+                "second": {"queue_order": 2, "item_name": "Second"},
+            }
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first" name="First Track"/>'
+            '<leaf id="second" name="Second Track"/>'
+            '<leaf id="third" name="Third Track"/></playlist>'
+        )
+
+        view = QueueManageView(Mock(), queue_status, playlist)
+        select = next(child for child in view.children if hasattr(child, "options"))
+        labels = {child.label for child in view.children if hasattr(child, "label")}
+
+        self.assertEqual([option.value for option in select.options], ["first", "second", "third"])
+        self.assertIn("First Track", select.options[0].label)
+        self.assertIn("Second Track", select.options[1].label)
+        self.assertIn("Third Track", select.options[2].label)
+        self.assertTrue({"Remove", "Move Earlier", "Move Later"}.issubset(labels))
+        self.assertTrue(view.remove_selected_button.disabled)
+        self.assertTrue(view.move_earlier_button.disabled)
+        self.assertTrue(view.move_later_button.disabled)
+
+    async def test_queue_manager_enforces_voice_room_guard_before_mutating(self):
+        cog = Mock()
+        cog._playback_guard = AsyncMock(return_value=(False, "Join the listening room"))
+        cog.vlc = SimpleNamespace(run_async=AsyncMock())
+        view = QueueManageView(
+            cog,
+            {"queued_items": {"track": {"queue_order": 1, "item_name": "Track"}}},
+            ET.fromstring('<playlist><leaf id="track" name="Track"/></playlist>'),
+        )
+        view.selected_queue_item_id = "track"
+        interaction = SimpleNamespace(
+            user=Mock(),
+            response=SimpleNamespace(
+                send_message=AsyncMock(),
+                defer=AsyncMock(),
+            ),
+            message=SimpleNamespace(edit=AsyncMock()),
+        )
+
+        await view._apply_queue_change(interaction, "remove")
+
+        cog._playback_guard.assert_awaited_once_with(
+            interaction.user,
+            presence_only=True,
+        )
+        interaction.response.send_message.assert_awaited_once_with(
+            "Join the listening room",
+            ephemeral=True,
+        )
+        interaction.response.defer.assert_not_awaited()
+        cog.vlc.run_async.assert_not_awaited()
 
     def test_queue_picker_preserves_playlist_positions_and_limits_options(self):
         playlist = [
