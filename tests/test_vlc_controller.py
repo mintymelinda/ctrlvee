@@ -503,13 +503,120 @@ class VLCControllerTests(unittest.TestCase):
             "B": {"item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
         }
         self.controller._shuffle_restore_queue = ["A"]
-
-        result = self.controller.remove_from_queue_by_id("A")
+        before = ET.fromstring('<playlist><leaf id="A" name="Alpha"/><leaf id="B" name="Bravo"/></playlist>')
+        after = ET.fromstring('<playlist><leaf id="B" name="Bravo"/></playlist>')
+        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
+            self.controller, "delete_playlist_item", return_value=True
+        ) as delete:
+            result = self.controller.remove_from_queue_by_id("A")
 
         self.assertTrue(result["success"])
         self.assertEqual(result["removed_item_id"], "A")
+        delete.assert_called_once_with("A")
         self.assertEqual(self.controller._queued_items["B"]["queue_order"], 1)
-        self.assertEqual(self.controller._shuffle_restore_queue, ["A"])
+        self.assertEqual(self.controller._shuffle_restore_queue, [])
+
+    def test_remove_preserves_current_playlist_item(self):
+        self.controller._queued_items = {
+            "current": {"item_name": "Current", "queue_order": 1}
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="current" name="Current" current="current"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "delete_playlist_item"
+        ) as delete:
+            result = self.controller.remove_from_queue_by_id("current")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["preserved_item_ids"], ["current"])
+        delete.assert_not_called()
+        self.assertNotIn("current", self.controller._queued_items)
+
+    def test_remove_preserves_scheduled_media_by_uri(self):
+        self.controller._queued_items = {
+            "scheduled": {"item_name": "Scheduled", "queue_order": 1}
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="scheduled" name="Scheduled" uri="file:///media/scheduled.mkv"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "delete_playlist_item"
+        ) as delete:
+            result = self.controller.remove_from_queue_by_id(
+                "scheduled",
+                protected_uris={"file:///media/scheduled.mkv"},
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["preserved_item_ids"], ["scheduled"])
+        delete.assert_not_called()
+        self.assertNotIn("scheduled", self.controller._queued_items)
+
+    def test_remove_keeps_queue_record_when_vlc_is_unavailable(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1}
+        }
+        with patch.object(self.controller, "get_playlist", return_value=None):
+            result = self.controller.remove_from_queue_by_id("queued")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "playlist_unavailable")
+        self.assertIn("queued", self.controller._queued_items)
+
+    def test_remove_keeps_queue_record_when_playlist_delete_fails(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1}
+        }
+        playlist = ET.fromstring('<playlist><leaf id="queued" name="Queued"/></playlist>')
+        with patch.object(self.controller, "get_playlist", side_effect=[playlist, playlist]), patch.object(
+            self.controller, "delete_playlist_item", return_value=False
+        ):
+            result = self.controller.remove_from_queue_by_id("queued")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["failed_item_ids"], ["queued"])
+        self.assertIn("queued", self.controller._queued_items)
+
+    def test_clear_queue_removes_queued_media_and_preserves_current_scheduled_and_unrelated(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1},
+            "scheduled": {"item_name": "Scheduled", "queue_order": 2},
+        }
+        before = ET.fromstring(
+            '<playlist><leaf id="current" name="Current" current="current"/>'
+            '<leaf id="queued" name="Queued"/>'
+            '<leaf id="scheduled" name="Scheduled" uri="file:///media/scheduled.mkv"/>'
+            '<leaf id="unrelated" name="Unrelated"/></playlist>'
+        )
+        after = ET.fromstring(
+            '<playlist><leaf id="current" name="Current" current="current"/>'
+            '<leaf id="scheduled" name="Scheduled" uri="file:///media/scheduled.mkv"/>'
+            '<leaf id="unrelated" name="Unrelated"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
+            self.controller, "delete_playlist_item", return_value=True
+        ) as delete:
+            result = self.controller.clear_queue(
+                protected_uris={"file:///media/scheduled.mkv"}
+            )
+
+        self.assertTrue(result["success"])
+        delete.assert_called_once_with("queued")
+        self.assertEqual(result["removed_item_ids"], ["queued", "scheduled"])
+        self.assertEqual(result["preserved_item_ids"], ["scheduled"])
+        self.assertEqual(self.controller._queued_items, {})
+
+    def test_clear_queue_retains_tracking_when_vlc_is_unavailable(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1}
+        }
+        original_queue = dict(self.controller._queued_items)
+        with patch.object(self.controller, "get_playlist", return_value=None):
+            result = self.controller.clear_queue()
+
+        self.assertFalse(result["success"])
+        self.assertEqual(self.controller._queued_items, original_queue)
 
     def test_queue_management_by_id_rejects_stale_playlist_identity(self):
         self.controller._queued_items = {
