@@ -123,7 +123,7 @@ def remove_watch_folder(raw: str, watch_service, vlc, purge_playlist: bool) -> d
             return {'error': "Failed to update watch folders configuration. Please check logs."}
         if watch_service:
             watch_service.sync_folders(updated, forget_removed=True)
-    purge = vlc.remove_playlist_items_under(match) if (purge_playlist and vlc) else None
+    purge = vlc.run_sync("remove_playlist_items_under", match) if (purge_playlist and vlc) else None
     return {'folder': match, 'remaining': len(updated), 'purge': purge}
 
 
