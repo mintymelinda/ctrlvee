@@ -22,6 +22,7 @@ from src.cogs.playback import (
     QueueManageView,
     _decide_playback_allow,
     _member_has_allowed_role,
+    _format_progress_bar,
 )
 
 
@@ -647,6 +648,45 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 await command.callback(cog, ctx, *args)
                 cog._check_room.assert_awaited_once_with(ctx)
                 ctx.send.assert_not_awaited()
+
+    def test_progress_bar_clamps_position_and_formats_fraction(self):
+        self.assertEqual(_format_progress_bar(0, 100), "[░░░░░░░░░░░░░░░░]")
+        self.assertEqual(_format_progress_bar(50, 100), "[████████░░░░░░░░]")
+        self.assertEqual(_format_progress_bar(150, 100), "[████████████████]")
+        self.assertEqual(_format_progress_bar(-10, 100), "[░░░░░░░░░░░░░░░░]")
+        self.assertEqual(_format_progress_bar(10, 0), "")
+
+    async def test_status_embed_handles_missing_state_and_adds_visual_progress(self):
+        status = ET.fromstring(
+            "<root><time>45</time><length>180</length></root>"
+        )
+        playlist = ET.fromstring(
+            '<playlist><leaf id="1" name="Example.Movie.2025" uri="/media/example.mkv" current="true"/></playlist>'
+        )
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog.vlc = SimpleNamespace(
+            run_async=AsyncMock(side_effect=[status, playlist])
+        )
+        cog.tmdb = SimpleNamespace(
+            get_movie_metadata=Mock(return_value=None),
+            get_tv_metadata=Mock(return_value=None),
+            _last_match_score=0.0,
+        )
+        cog.logger = Mock()
+
+        with (
+            patch("src.cogs.playback.MediaUtils.parse_movie_filename", return_value=("Example Movie", 2025)),
+            patch("src.cogs.playback.MediaUtils.parse_tv_filename", return_value=(None, None, None, None)),
+            patch("src.cogs.playback.MediaUtils.extract_edition_tag", return_value=None),
+            patch("src.cogs.playback.MediaUtils.clean_filename_for_display", return_value="Example Movie"),
+            patch("src.cogs.playback.MediaUtils.format_time", side_effect=lambda value: f"{value}s"),
+        ):
+            embed = await PlaybackCommands.get_status_embed(cog)
+
+        fields = {field.name: field.value for field in embed.fields}
+        self.assertEqual(fields["State"], "⚠️ Unavailable")
+        self.assertIn("[████░░░░░░░░░░░░]", fields["Progress"])
+        self.assertIn("45s / 180s", fields["Progress"])
 
     def test_pure_guard_allows_when_no_room_is_configured(self):
         self.assertEqual(_decide_playback_allow(False, True, 1, None, False, False), (True, ""))

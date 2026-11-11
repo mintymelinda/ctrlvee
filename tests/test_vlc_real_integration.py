@@ -49,7 +49,11 @@ class RealVLCIntegrationTests(unittest.TestCase):
         cls.process = subprocess.Popen(
             [
                 "cvlc",
-                "--intf", "http",
+                # Keep VLC's headless dummy interface as the primary
+                # interface; expose the HTTP control server as an extra
+                # interface rather than making the Lua HTTP module the UI.
+                "--intf", "dummy",
+                "--extraintf", "http",
                 "--http-host", "127.0.0.1",
                 "--http-port", str(cls.port),
                 "--http-password", cls.password,
@@ -144,9 +148,19 @@ class RealVLCIntegrationTests(unittest.TestCase):
             time.sleep(0.25)
         self.fail(f"Timed out waiting for {description}; last value: {last_value!r}\\n{self.vlc_diagnostics()}")
 
-    def load_playlist(self):
-        """Reset VLC and enqueue fixtures, waiting for each playlist mutation."""
+    def clear_playlist(self):
+        """Stop playback completely before mutating the live VLC playlist."""
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
         self.controller.stop()
+        self.wait_for(
+            lambda: status
+            if (status := self.controller.get_status()) is not None
+            and status.findtext("state") == "stopped"
+            else None,
+            "VLC playback to stop before clearing the playlist",
+        )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
+
         self.controller.send_command("pl_empty")
         self.wait_for(
             lambda: playlist
@@ -155,7 +169,12 @@ class RealVLCIntegrationTests(unittest.TestCase):
             else None,
             "VLC playlist to become empty",
         )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
         self.controller.clear_queue_tracking()
+
+    def load_playlist(self):
+        """Reset VLC and enqueue fixtures, waiting for each playlist mutation."""
+        self.clear_playlist()
 
         item_ids = []
         for index, media_path in enumerate(self.media_paths, start=1):
@@ -188,17 +207,19 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
     def test_real_vlc_playlist_navigation_and_repeat_modes(self):
         first_id, second_id, third_id = self.load_playlist()
-        self.assertIsNotNone(self.controller.play_item(first_id))
+        self.controller.play_item(first_id)
         self.wait_for_current_item(first_id)
 
-        self.assertIsNotNone(self.controller.next())
+        # VLC may execute navigation while returning an empty HTTP body. The
+        # selected playlist item, not the response XML, is the acknowledgement.
+        self.controller.next()
         self.wait_for_current_item(second_id)
-        self.assertIsNotNone(self.controller.previous())
+        self.controller.previous()
         self.wait_for_current_item(first_id)
 
         # VLC exposes repeat-current and repeat-playlist as independent toggles.
         self.assertEqual(self.controller.get_repeat_state(), "none")
-        self.assertIsNotNone(self.controller.send_command("pl_loop"))
+        self.controller.send_command("pl_loop")
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "all",
             "repeat-playlist mode to enable",
@@ -208,7 +229,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             lambda: self.controller.get_repeat_state() == "none",
             "repeat-playlist mode to disable",
         )
-        self.assertIsNotNone(self.controller.send_command("pl_repeat"))
+        self.controller.send_command("pl_repeat")
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "one",
             "repeat-current mode to enable",
@@ -331,7 +352,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         first_id, second_id, _ = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
         self.wait_for_current_item(first_id)
-        self.assertIsNotNone(self.controller.stop())
+        self.controller.stop()
         self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -366,10 +387,8 @@ class RealVLCIntegrationTests(unittest.TestCase):
             )
 
         results = asyncio.run(issue_commands())
-        self.assertTrue(
-            all(result is not None for result in results),
-            f"Serialized VLC command results: {results!r}\n{self.vlc_diagnostics()}",
-        )
+        # Command response XML is not a reliable acknowledgement for every
+        # VLC action. Verify the final selected item and playback state below.
         self.wait_for_current_item(second_id)
         final_status = self.wait_for(
             lambda: status
@@ -382,6 +401,10 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(self.controller.get_playlist())
 
     def test_real_vlc_enqueue_play_pause_seek_resume_and_stop(self):
+        # The VLC server is shared for this test class. Previous tests may have
+        # left media loaded or paused, so this test must establish an empty
+        # playlist before asserting the single-item enqueue/play lifecycle.
+        self.clear_playlist()
         initial_status = self.controller.get_status()
         self.assertIsNotNone(
             initial_status,
