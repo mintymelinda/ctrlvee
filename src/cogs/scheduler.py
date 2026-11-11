@@ -462,6 +462,16 @@ class Scheduler(commands.Cog):
 
     async def _execute_due_schedule(self, schedule, leaf, now):
         """Execute one due job without holding the list lock over VLC I/O."""
+        execution_snapshot = None
+        if schedule.get("status") == "executing" and "source_item_id" in schedule:
+            try:
+                execution_snapshot = await self.vlc.run_async("get_playback_snapshot")
+            except Exception:
+                logger.exception(
+                    "Could not inspect live playback while reconciling scheduled movie '%s'",
+                    schedule.get("title", "Unknown"),
+                )
+
         async with self._schedule_lock:
             if schedule.get("status") == "announcing":
                 return "announcing"
@@ -488,11 +498,15 @@ class Scheduler(commands.Cog):
                 # A different current item after the scheduled command was issued
                 # means another playback action superseded it. Do not retry later
                 # and unexpectedly interrupt that newer manual selection.
-                if "source_item_id" in schedule and claimed_item_id is not None:
-                    live_status, live_playlist = await self.vlc.run_async(
-                        "get_playback_snapshot"
-                    )
-                    live_item, _ = self.vlc._current_playlist_item(live_playlist)
+                if execution_snapshot is not None and claimed_item_id is not None:
+                    live_status, live_playlist = execution_snapshot
+                    live_item = next(
+                        (
+                            item for item in live_playlist.findall(".//leaf")
+                            if item.get("current") is not None
+                        ),
+                        None,
+                    ) if live_playlist is not None else None
                     live_item_id = live_item.get("id") if live_item is not None else None
                     source_item_id = schedule.get("source_item_id")
                     if (

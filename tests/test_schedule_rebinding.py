@@ -77,17 +77,17 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._save_schedule_backup = Mock()
         async def run_async(method_name, *args, **kwargs):
             if method_name == "play_item_and_confirm":
+                previous = vlc.get_playlist()
+                previous_item = next(
+                    (item for item in previous.findall(".//leaf") if item.get("current") is not None),
+                    None,
+                ) if previous is not None else None
                 result = vlc.play_item(*args, **kwargs)
                 playlist = vlc.get_playlist()
                 current = next(
                     (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
                     None,
                 ) if playlist is not None else None
-                previous = vlc.get_playlist()
-                previous_item = next(
-                    (item for item in previous.findall(".//leaf") if item.get("current") is not None),
-                    None,
-                ) if previous is not None else None
                 return (
                     result,
                     bool(current is not None and str(current.get("id")) == str(args[0])),
