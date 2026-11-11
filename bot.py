@@ -65,11 +65,18 @@ from src.services.watch_folder_service import WatchFolderService
 from src.utils.media_utils import MediaUtils
 from src.services.radarr_service import RadarrService
 from src.services.stats_service import StatsService
+from src.services.voice_channel_service import VoiceChannelService
 
 vlc = VLCController(bot=bot)
 tmdb_service = TMDBService()
 watch_service = WatchFolderService(vlc)
 stats_service = StatsService(path=Config.WATCH_STATS_FILE, excluded=Config.STATS_EXCLUDED_USER_IDS)
+voice_channel_service = VoiceChannelService(
+    bot,
+    connect_timeout=Config.VOICE_CONNECT_TIMEOUT,
+)
+# PlaybackCommands calls this shared service before applying its existing room/ownership guards.
+bot.join_member_voice_channel = voice_channel_service.join_member_channel
 _radarr_services = []
 try:
     # Build Radarr service instances from config (multi or single)
@@ -145,7 +152,7 @@ def _build_privacy_embed() -> discord.Embed:
         value=(
             "• Message content (for command parsing only, via Message Content Intent)\n"
             "• Basic Discord metadata needed to execute commands (user ID, guild ID, channel ID, role checks)\n"
-            "• Voice state and channel info if voice auto-join/reconnect features are enabled"
+            "• Voice state and channel info if voice auto-join/reconnect features are enabled, including command-triggered channel joining"
         ),
         inline=False,
     )
@@ -582,8 +589,15 @@ async def on_voice_state_update(member, before, after):
         except Exception:
             pass
 
-        # Try to rejoin the configured channel
-        joined = await join_voice_channel()
+        # Prefer the last command-selected channel; fall back to the configured startup channel.
+        target_channel = (
+            voice_channel_service.get_target_channel(before.channel.guild)
+            if before and before.channel else None
+        )
+        if target_channel is not None:
+            joined, _ = await voice_channel_service.join_channel(target_channel)
+        else:
+            joined = await join_voice_channel()
         if joined:
             _reconnect_attempts = 0
             _voice_debounce_until = time.time() + max(5.0, float(getattr(Config, 'VOICE_DEBOUNCE_SECONDS', 5.0)))
