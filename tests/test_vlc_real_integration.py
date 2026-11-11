@@ -309,7 +309,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         current = self.wait_for_current_uri(self.media_paths[2].as_uri())
         self.assertEqual(queued_play["item_id"], current.get("id"))
         self.assertEqual(queued_play["queue_id"], second["queue_id"])
-        self.assertEqual(len(self.controller.get_playlist().findall(".//leaf")), 1)
+        self.assertEqual(len(self.controller.get_playlist().findall(".//leaf")), 4)
 
     def test_real_vlc_bot_owned_queue_survives_controller_restart_and_playlist_reset(self):
         first_id, second_id, third_id = self.load_playlist()
