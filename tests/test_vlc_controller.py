@@ -65,6 +65,42 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["item"].get("name"), "Second")
         play.assert_called_once_with("2")
 
+    def test_resume_selected_item_only_targets_the_still_current_item(self):
+        playlist = ET.fromstring('<playlist><leaf id="selected" current="current"/></playlist>')
+        status = ET.fromstring("<root><state>paused</state></root>")
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_status", return_value=status
+        ), patch.object(self.controller, "play_item", return_value=ET.fromstring("<root><ok/></root>")) as play:
+            result = self.controller.resume_selected_item_if_current("selected")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["reason"], "resume_sent")
+        play.assert_called_once_with("selected")
+
+    def test_resume_selected_item_refuses_to_override_a_newer_selection(self):
+        playlist = ET.fromstring('<playlist><leaf id="newer" current="current"/></playlist>')
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_status"
+        ) as get_status, patch.object(self.controller, "play_item") as play:
+            result = self.controller.resume_selected_item_if_current("older")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "selection_changed")
+        get_status.assert_not_called()
+        play.assert_not_called()
+
+    def test_resume_selected_item_verification_does_not_issue_another_play(self):
+        playlist = ET.fromstring('<playlist><leaf id="selected" current="current"/></playlist>')
+        status = ET.fromstring("<root><state>paused</state></root>")
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_status", return_value=status
+        ), patch.object(self.controller, "play_item") as play:
+            result = self.controller.resume_selected_item_if_current("selected", resume=False)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "not_playing")
+        play.assert_not_called()
+
     def test_queue_playlist_item_at_position_selects_and_queues_atomically(self):
         playlist = ET.fromstring('<playlist><leaf id="1" name="First"/><leaf id="2" name="Second"/></playlist>')
         queued = {"success": True, "queue_order": 1, "total_queued": 1}
