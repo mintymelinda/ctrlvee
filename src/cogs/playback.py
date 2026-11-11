@@ -1330,6 +1330,8 @@ class PlaybackCommands(commands.Cog):
     async def subtitle_next(self, ctx):
         """Cycle to the next subtitle track in VLC (if supported)."""
         try:
+            if not await self._check_room(ctx):
+                return
             ok = await self.vlc.run_async("subtitle_next")
             if ok:
                 embed = discord.Embed(
@@ -1357,6 +1359,8 @@ class PlaybackCommands(commands.Cog):
     async def subtitle_prev(self, ctx):
         """Cycle to the previous subtitle track in VLC (if supported)."""
         try:
+            if not await self._check_room(ctx):
+                return
             ok = await self.vlc.run_async("subtitle_prev")
             if ok:
                 embed = discord.Embed(
@@ -1461,6 +1465,8 @@ class PlaybackCommands(commands.Cog):
         - sub_set off        # Disable subtitles
         """
         try:
+            if not await self._check_room(ctx):
+                return
             if not track_id:
                 await ctx.send(f"Usage: {format_cmd_inline('sub_set <number|off>')}")
                 return
@@ -1669,6 +1675,8 @@ class PlaybackCommands(commands.Cog):
     async def audio_set(self, ctx, track_id: str):
         """Select a specific audio track by position (from audio_list)."""
         try:
+            if not await self._check_room(ctx):
+                return
             if not track_id:
                 await ctx.send(f"Usage: {format_cmd_inline('audio_set <number>')}")
                 return
@@ -3012,6 +3020,132 @@ class PlaybackCommands(commands.Cog):
             logger.error(f"Error in shuffle_toggle command: {e}")
             await ctx.send(f'Error toggling shuffle: {str(e)}')
 
+class PlaybackAudioTrackSelect(discord.ui.Select):
+    """Choose an audio track reported by the current VLC media."""
+
+    def __init__(self, playback_view, tracks):
+        self.playback_view = playback_view
+        options = []
+        for position, track in enumerate(tracks, 1):
+            index = track.get("index") or position
+            name = track.get("name") or f"Track {index}"
+            options.append(discord.SelectOption(
+                label=f"{index}. {name}"[:100],
+                value=str(index),
+                description=(str(track.get("language") or "Audio track")[:100]),
+                default=bool(track.get("selected")),
+            ))
+        super().__init__(
+            placeholder="Audio track",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.playback_view._dispatch(
+            interaction, "audio_set", self.values[0], refresh_panel=False
+        )
+
+
+class PlaybackSubtitleTrackSelect(discord.ui.Select):
+    """Choose a subtitle track, disable subtitles, or cycle available tracks."""
+
+    def __init__(self, playback_view, tracks):
+        self.playback_view = playback_view
+        options = []
+        track_limit = 22 if len(tracks) > 1 else 24
+        for position, track in enumerate(tracks[:track_limit], 1):
+            index = track.get("index") or position
+            name = track.get("name") or f"Track {index}"
+            options.append(discord.SelectOption(
+                label=f"{index}. {name}"[:100],
+                value=str(index),
+                description=(str(track.get("language") or "Subtitle track")[:100]),
+                default=bool(track.get("selected")),
+            ))
+        if len(tracks) > 1:
+            options.extend([
+                discord.SelectOption(label="Next subtitle track", value="__next__"),
+                discord.SelectOption(label="Previous subtitle track", value="__previous__"),
+            ])
+        options.append(discord.SelectOption(label="Turn subtitles off", value="off"))
+        super().__init__(
+            placeholder="Subtitle track",
+            min_values=1,
+            max_values=1,
+            options=options[:25],
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        selected = self.values[0]
+        if selected == "__next__":
+            command, args = "subtitle_next", ()
+        elif selected == "__previous__":
+            command, args = "subtitle_prev", ()
+        else:
+            command, args = "subtitle_set", (selected,)
+        await self.playback_view._dispatch(
+            interaction, command, *args, refresh_panel=False
+        )
+
+
+class PlaybackSpeedSelect(discord.ui.Select):
+    """Choose a playback rate using the existing speed command."""
+
+    SPEED_OPTIONS = (
+        ("0.5x", "0.5"),
+        ("0.75x", "0.75"),
+        ("Normal (1.0x)", "1.0"),
+        ("1.25x", "1.25"),
+        ("1.5x", "1.5"),
+        ("1.75x", "1.75"),
+        ("2.0x", "2.0"),
+    )
+
+    def __init__(self, playback_view):
+        self.playback_view = playback_view
+        super().__init__(
+            placeholder="Playback speed",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label=label, value=value, default=value == "1.0")
+                for label, value in self.SPEED_OPTIONS
+            ],
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        await self.playback_view._dispatch(
+            interaction, "speed", self.values[0], refresh_panel=False
+        )
+
+
+class PlaybackAdvancedView(discord.ui.View):
+    """Ephemeral advanced controls populated from the currently loaded VLC media."""
+
+    def __init__(self, playback_view, audio_tracks, subtitle_tracks):
+        super().__init__(timeout=120)
+        self.playback_view = playback_view
+        if audio_tracks:
+            self.add_item(PlaybackAudioTrackSelect(playback_view, audio_tracks))
+        if subtitle_tracks:
+            self.add_item(PlaybackSubtitleTrackSelect(playback_view, subtitle_tracks))
+        self.add_item(PlaybackSpeedSelect(playback_view))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+
 class QueuePlaylistSelect(discord.ui.Select):
     """Select a playlist entry to add through the existing soft-queue command."""
 
@@ -3331,7 +3465,13 @@ class PlaybackControlView(discord.ui.View):
             return False
         return True
 
-    async def _dispatch(self, interaction: discord.Interaction, command_name: str, *args) -> None:
+    async def _dispatch(
+        self,
+        interaction: discord.Interaction,
+        command_name: str,
+        *args,
+        refresh_panel: bool = True,
+    ) -> None:
         await interaction.response.defer(ephemeral=True)
 
         class InteractionContext:
@@ -3362,7 +3502,7 @@ class PlaybackControlView(discord.ui.View):
             )
             return
 
-        if interaction.message is not None:
+        if refresh_panel and interaction.message is not None:
             try:
                 await interaction.message.edit(
                     embed=await self.cog._playback_panel_embed(),
@@ -3418,6 +3558,35 @@ class PlaybackControlView(discord.ui.View):
     @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "queue_status")
+
+    @discord.ui.button(label="More Options", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+    async def advanced_options_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            audio_tracks = await self.cog.vlc.run_async("get_audio_tracks") or []
+            subtitle_tracks = await self.cog.vlc.run_async("get_subtitle_tracks") or []
+            view = PlaybackAdvancedView(self, audio_tracks, subtitle_tracks)
+            sections = []
+            if audio_tracks:
+                sections.append("Audio tracks are available below.")
+            else:
+                sections.append("VLC did not report any audio tracks for this media.")
+            if subtitle_tracks:
+                sections.append("Subtitle tracks and navigation are available below.")
+            else:
+                sections.append("VLC did not report any subtitle tracks for this media.")
+            sections.append("Playback speed is always available.")
+            await interaction.followup.send(
+                "\n".join(sections),
+                view=view,
+                ephemeral=True,
+            )
+        except Exception:
+            self.cog.logger.exception("Could not open advanced playback options")
+            await interaction.followup.send(
+                "Advanced playback options are currently unavailable.",
+                ephemeral=True,
+            )
 
     @discord.ui.button(label="Manage Queue", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
     async def manage_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):

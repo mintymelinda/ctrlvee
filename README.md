@@ -170,7 +170,7 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 
 ### Playback
 
-- `!panel` — post a video-first playback panel using the existing TMDB-aware Now Playing artwork, metadata, playback state, and progress, alongside Previous, Play, Pause, Stop, Next, Restart, 10- and 30-second Rewind and Forward, Toggle Shuffle, View Queue, Add to Queue, and Manage Queue controls; Add to Queue opens a private playlist picker, while Manage Queue lets playback roles privately remove queued tracks, move them earlier/later, or clear all soft-queue tracking with confirmation
+- `!panel` — post a video-first playback panel using the existing TMDB-aware Now Playing artwork, metadata, playback state, and progress, alongside Previous, Play, Pause, Stop, Next, Restart, 10- and 30-second Rewind and Forward, Toggle Shuffle, View Queue, Add to Queue, and Manage Queue controls; Add to Queue opens a private playlist picker, while Manage Queue lets playback roles privately remove queued tracks, move them earlier/later, or clear all soft-queue tracking with confirmation; More Options opens private VLC-aware audio, subtitle, and playback-speed menus
 - `!play`, `!pause`, `!stop`, `!restart`
 - `!next`, `!previous`
 - `!rewind [seconds]`, `!forward [seconds]`

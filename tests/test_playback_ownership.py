@@ -9,6 +9,10 @@ from src.config import Config
 from src.cogs.playback import (
     PlaybackCommands,
     PlaybackControlView,
+    PlaybackAdvancedView,
+    PlaybackAudioTrackSelect,
+    PlaybackSubtitleTrackSelect,
+    PlaybackSpeedSelect,
     QueueClearConfirmView,
     QueuePlaylistSelect,
     QueueManageView,
@@ -266,6 +270,108 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fields["Soft Queue (1)"], "**#1** Queued Track")
         cog.get_status_embed.assert_awaited_once_with()
         cog.vlc.run_async.assert_awaited_once_with("get_queue_snapshot")
+
+    def test_advanced_playback_menu_only_shows_reported_tracks(self):
+        playback_view = PlaybackControlView(Mock())
+        view = PlaybackAdvancedView(
+            playback_view,
+            [{"index": 1, "name": "English", "language": "eng"}],
+            [{"index": 2, "name": "French", "language": "fra"}],
+        )
+        self.assertEqual(
+            [type(item) for item in view.children],
+            [PlaybackAudioTrackSelect, PlaybackSubtitleTrackSelect, PlaybackSpeedSelect],
+        )
+        audio = view.children[0]
+        subtitles = view.children[1]
+        self.assertEqual([(option.label, option.value) for option in audio.options], [("1. English", "1")])
+        subtitle_values = {option.value for option in subtitles.options}
+        self.assertEqual(subtitle_values, {"2", "off"})
+
+    def test_advanced_menu_adds_subtitle_navigation_for_multiple_tracks(self):
+        playback_view = PlaybackControlView(Mock())
+        view = PlaybackAdvancedView(
+            playback_view,
+            [],
+            [
+                {"index": 1, "name": "English"},
+                {"index": 2, "name": "French"},
+            ],
+        )
+        subtitle_select = next(
+            item for item in view.children
+            if isinstance(item, PlaybackSubtitleTrackSelect)
+        )
+        self.assertEqual(
+            {option.value for option in subtitle_select.options},
+            {"1", "2", "__next__", "__previous__", "off"},
+        )
+
+    def test_advanced_menu_always_exposes_speed_reset_and_presets(self):
+        view = PlaybackAdvancedView(PlaybackControlView(Mock()), [], [])
+        self.assertEqual(len(view.children), 1)
+        speed_select = view.children[0]
+        self.assertIsInstance(speed_select, PlaybackSpeedSelect)
+        self.assertEqual(
+            [option.value for option in speed_select.options],
+            ["0.5", "0.75", "1.0", "1.25", "1.5", "1.75", "2.0"],
+        )
+        self.assertTrue(next(option for option in speed_select.options if option.value == "1.0").default)
+
+    async def test_advanced_selects_dispatch_existing_guarded_commands(self):
+        cases = (
+            (PlaybackAudioTrackSelect, [{"index": 3, "name": "English"}], "3", "audio_set", ("3",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "2", "subtitle_set", ("2",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "off", "subtitle_set", ("off",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__next__", "subtitle_next", ()),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__previous__", "subtitle_prev", ()),
+            (PlaybackSpeedSelect, [], "1.5", "speed", ("1.5",)),
+        )
+        for select_type, tracks, value, command, args in cases:
+            with self.subTest(command=command, value=value):
+                playback_view = PlaybackControlView(Mock())
+                playback_view._dispatch = AsyncMock()
+                select = (
+                    select_type(playback_view)
+                    if select_type is PlaybackSpeedSelect
+                    else select_type(playback_view, tracks)
+                )
+                select._values = [value]
+                interaction = Mock()
+                await select.callback(interaction)
+                playback_view._dispatch.assert_awaited_once_with(
+                    interaction,
+                    command,
+                    *args,
+                    refresh_panel=False,
+                )
+
+    async def test_advanced_menu_rejects_users_without_control_role(self):
+        playback_view = PlaybackControlView(Mock())
+        view = PlaybackAdvancedView(playback_view, [], [])
+        interaction = Mock()
+        interaction.user = SimpleNamespace(roles=[])
+        interaction.response.send_message = AsyncMock()
+        self.assertFalse(await view.interaction_check(interaction))
+        interaction.response.send_message.assert_awaited_once_with(
+            "You don't have a role permitted to control playback.",
+            ephemeral=True,
+        )
+
+    async def test_advanced_track_commands_require_voice_room_presence(self):
+        for command, args in (
+            (PlaybackCommands.audio_set, ("1",)),
+            (PlaybackCommands.subtitle_set, ("1",)),
+            (PlaybackCommands.subtitle_next, ()),
+            (PlaybackCommands.subtitle_prev, ()),
+        ):
+            with self.subTest(command=command.name):
+                cog = PlaybackCommands.__new__(PlaybackCommands)
+                cog._check_room = AsyncMock(return_value=False)
+                ctx = SimpleNamespace(send=AsyncMock())
+                await command.callback(cog, ctx, *args)
+                cog._check_room.assert_awaited_once_with(ctx)
+                ctx.send.assert_not_awaited()
 
     def test_pure_guard_allows_when_no_room_is_configured(self):
         self.assertEqual(_decide_playback_allow(False, True, 1, None, False, False), (True, ""))
