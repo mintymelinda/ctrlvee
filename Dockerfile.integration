@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends vlc tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system vlc \
+    && useradd --system --gid vlc --create-home --home-dir /home/vlc --shell /usr/sbin/nologin vlc
+
+WORKDIR /app
+
+COPY requirements-test.txt ./
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -r requirements-test.txt
+
+COPY . .
+
+# VLC refuses to start as root. Run both the test runner and VLC as an
+# unprivileged user; the tests write their fixtures and queue state under /tmp.
+USER vlc
+
+CMD ["python", "-m", "unittest", "discover", "--start-directory", "tests", "--pattern", "test_vlc_real_integration.py", "--verbose"]

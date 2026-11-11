@@ -59,3 +59,16 @@ jobs:
           from src.cogs.watch import WatchCommands
           print('CtrlVee runtime imports OK')
           "
+
+  real-vlc-integration:
+    name: Real VLC integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build integration image with headless VLC
+        run: docker build --file Dockerfile.integration --tag ctrlvee:vlc-integration .
+
+      - name: Run controller tests against real VLC
+        run: docker run --rm ctrlvee:vlc-integration

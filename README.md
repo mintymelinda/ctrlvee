@@ -311,3 +311,16 @@ For public deployments, set these in `.env`:
 ## License
 
 MIT. See `LICENSE`.
+
+### Real VLC integration-test image
+
+The production image intentionally does not contain VLC: it controls the VLC instance running on the media server over the LAN. For deeper CI coverage, `Dockerfile.integration` builds a separate test image with headless VLC installed. Its integration test starts a real VLC HTTP interface, generates a short local WAV fixture, and exercises enqueue, play, pause, resume, seek, and stop through the same `VLCController` used by the bot.
+
+Run the real-VLC integration suite locally with:
+
+```sh
+docker build -f Dockerfile.integration -t ctrlvee:vlc-integration .
+docker run --rm ctrlvee:vlc-integration
+```
+
+This image is for tests only; it does not change the production Compose deployment or the remote-VLC architecture.
