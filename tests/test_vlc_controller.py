@@ -27,10 +27,8 @@ class VLCControllerTests(unittest.TestCase):
 
     def queue_item(self, item_id):
         with patch.object(self.controller, "get_shuffle_state", return_value=False), patch.object(
-            self.controller, "get_current_position", return_value=0
-        ), patch.object(
-            self.controller, "_parse_playlist_info", return_value=({}, None)
-        ):
+            self.controller, "_parse_playlist_info", return_value=({str(item_id): {"name": str(item_id)}}, None)
+        ), patch("src.services.vlc_controller.uuid.uuid4", return_value=item_id):
             result = self.controller.queue_item_next(item_id)
         self.assertTrue(result["success"], result)
 
@@ -321,29 +319,47 @@ class VLCControllerTests(unittest.TestCase):
         self.assertTrue(result["attempted"])
         play.assert_called_once_with("queued")
 
-    def test_queue_backup_round_trip_preserves_both_queue_structures(self):
+    def test_queue_backup_round_trip_preserves_independent_queue_identity(self):
         self.controller._queued_items = {
-            "17": {
+            "queue-17": {
+                "queue_id": "queue-17",
+                "playlist_item_id": "17",
                 "item_id": "17",
                 "item_name": "Episode 1",
                 "queue_order": 1,
                 "restore_shuffle": True,
             }
         }
-        self.controller._shuffle_restore_queue = ["17"]
+        self.controller._shuffle_restore_queue = ["queue-17"]
 
         self.controller._save_queue_backup()
         restored = VLCController(queue_backup_file=str(self.backup_path))
 
         self.assertEqual(restored._queued_items, self.controller._queued_items)
-        self.assertEqual(restored._shuffle_restore_queue, ["17"])
+        self.assertEqual(restored._shuffle_restore_queue, ["queue-17"])
+
+    def test_queue_backup_migrates_legacy_playlist_keyed_entries(self):
+        self.controller._queued_items = {
+            "17": {"item_id": "17", "item_name": "Episode 1", "queue_order": 1, "restore_shuffle": True}
+        }
+        self.controller._shuffle_restore_queue = ["17"]
+        self.controller._save_queue_backup()
+
+        restored = VLCController(queue_backup_file=str(self.backup_path))
+        queue_id, info = next(iter(restored._queued_items.items()))
+
+        self.assertNotEqual(queue_id, "17")
+        self.assertEqual(info["queue_id"], queue_id)
+        self.assertEqual(info["playlist_item_id"], "17")
+        self.assertEqual(info["item_id"], "17")
+        self.assertEqual(restored._shuffle_restore_queue, [queue_id])
 
     def test_queue_backup_reconciles_and_preserves_order_after_restart(self):
         self.controller._queued_items = {
-            "17": {"item_id": "17", "item_name": "Episode 1", "queue_order": 2, "restore_shuffle": False},
-            "23": {"item_id": "23", "item_name": "Episode 2", "queue_order": 1, "restore_shuffle": True},
+            "queue-17": {"queue_id": "queue-17", "playlist_item_id": "17", "item_id": "17", "item_name": "Episode 1", "queue_order": 2, "restore_shuffle": False},
+            "queue-23": {"queue_id": "queue-23", "playlist_item_id": "23", "item_id": "23", "item_name": "Episode 2", "queue_order": 1, "restore_shuffle": True},
         }
-        self.controller._shuffle_restore_queue = ["23"]
+        self.controller._shuffle_restore_queue = ["queue-23"]
         self.controller._save_queue_backup()
 
         restored = VLCController(queue_backup_file=str(self.backup_path))
@@ -356,30 +372,30 @@ class VLCControllerTests(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["removed_item_ids"], [])
-        self.assertEqual(result["queued_item_ids"], ["23", "17"])
-        self.assertEqual(restored._queued_items["23"]["queue_order"], 1)
-        self.assertEqual(restored._queued_items["17"]["queue_order"], 2)
-        self.assertEqual(restored._shuffle_restore_queue, ["23"])
+        self.assertEqual(result["queued_item_ids"], ["queue-23", "queue-17"])
+        self.assertEqual(restored._queued_items["queue-23"]["queue_order"], 1)
+        self.assertEqual(restored._queued_items["queue-17"]["queue_order"], 2)
+        self.assertEqual(restored._shuffle_restore_queue, ["queue-23"])
 
     def test_queue_reconciliation_removes_missing_playlist_items_and_compacts_order(self):
         self.controller._queued_items = {
-            "missing": {"item_id": "missing", "item_name": "Removed", "queue_order": 1, "restore_shuffle": True},
-            "present": {"item_id": "present", "item_name": "Kept", "queue_order": 2, "restore_shuffle": False},
+            "queue-missing": {"queue_id": "queue-missing", "playlist_item_id": "missing", "item_id": "missing", "item_name": "Removed", "queue_order": 1, "restore_shuffle": True},
+            "queue-present": {"queue_id": "queue-present", "playlist_item_id": "present", "item_id": "present", "item_name": "Kept", "queue_order": 2, "restore_shuffle": False},
         }
-        self.controller._shuffle_restore_queue = ["missing"]
+        self.controller._shuffle_restore_queue = ["queue-missing"]
         playlist = ET.fromstring('<playlist><leaf id="present" name="Kept"/></playlist>')
 
         with patch.object(self.controller, "get_playlist", return_value=playlist):
             result = self.controller.reconcile_queue_with_playlist()
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["removed_item_ids"], ["missing"])
-        self.assertEqual(result["queued_item_ids"], ["present"])
-        self.assertEqual(self.controller._queued_items["present"]["queue_order"], 1)
+        self.assertEqual(result["removed_queue_ids"], ["queue-missing"])
+        self.assertEqual(result["queued_item_ids"], ["queue-present"])
+        self.assertEqual(self.controller._queued_items["queue-present"]["queue_order"], 1)
         self.assertEqual(self.controller._shuffle_restore_queue, [])
 
         restored = VLCController(queue_backup_file=str(self.backup_path))
-        self.assertEqual(list(restored._queued_items), ["present"])
+        self.assertEqual(list(restored._queued_items), ["queue-present"])
         self.assertEqual(restored._shuffle_restore_queue, [])
 
     def test_queue_reconciliation_retains_backup_when_playlist_is_unavailable(self):
