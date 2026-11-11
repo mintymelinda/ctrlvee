@@ -350,6 +350,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 )
                 restored_message = SimpleNamespace(
                     id=654,
+                    channel=channel,
                     author=SimpleNamespace(id=999),
                     embeds=[panel_embed],
                     edit=AsyncMock(),
