@@ -1055,6 +1055,20 @@ class PlaybackCommands(commands.Cog):
                                     logger.error(f"Error handling queue transition: {e}")
 
                         if state_changed or position_changed:
+                            # The queue transition check may have been followed by a
+                            # manual command. Reconfirm immediately before publishing
+                            # presence or announcements from this monitor snapshot.
+                            if current_item_id:
+                                confirmation = await self.vlc.run_async(
+                                    "get_current_item_if_unchanged", current_item_id
+                                )
+                                if (
+                                    not confirmation.get("success")
+                                    or confirmation.get("state") != current_state
+                                ):
+                                    await asyncio.sleep(0.5)
+                                    continue
+
                             # Get item name if available
                             item_name = None
                             if current_item is not None:
@@ -1087,6 +1101,9 @@ class PlaybackCommands(commands.Cog):
                                         "Auto announce suppressed for command-selected item %s",
                                         expected_item_id,
                                     )
+                                    self.last_known_state = current_state
+                                    self.last_known_position = current_position
+                                    self.last_known_playing_item = current_item
                                     continue
                             # Hard suppression: if we just sent a command-driven Now Playing, skip auto announce entirely (short window)
                             if position_changed and (now_ts - self._last_command_announce_ts) < self._auto_suppress_seconds:
@@ -2214,7 +2231,6 @@ class PlaybackCommands(commands.Cog):
         if decision.get("next_success"):
             logger.info("Loading next track")
             await ctx.send('Loading next track...')
-            self._command_initiated_change = True
             await self._confirm_navigation_target(
                 ctx,
                 decision.get("expected_item_id"),
