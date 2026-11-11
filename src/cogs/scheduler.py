@@ -58,7 +58,7 @@ def _resolve_schedule_index(entry: dict, items: list, exists=lambda uri: True):
     return matches[-1] if matches else exact
 
 
-SCHEDULE_BACKUP_FILE = "schedule_backup.json"
+SCHEDULE_BACKUP_FILE = os.getenv("SCHEDULE_BACKUP_FILE", "schedule_backup.json")
 
 
 from src.services.tmdb_service import TMDBService
