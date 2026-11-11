@@ -319,16 +319,21 @@ class VLCController:
         return self.get_status(), self.get_playlist()
 
     def play_item_and_confirm(self, item_id):
-        """Issue a play command and confirm the resulting current item atomically."""
+        """Issue a play command and capture the previous and resulting item identities atomically."""
+        previous_playlist = self.get_playlist()
+        previous_item, _ = self._current_playlist_item(previous_playlist)
+        previous_item_id = previous_item.get("id") if previous_item is not None else None
+
         result = self.play_item(item_id)
         if result is None or result is False:
-            return result, False
+            return result, False, previous_item_id
         playlist = self.get_playlist()
         current = next(
             (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
             None,
         ) if playlist is not None else None
-        return result, bool(current is not None and str(current.get("id")) == str(item_id))
+        confirmed = bool(current is not None and str(current.get("id")) == str(item_id))
+        return result, confirmed, previous_item_id
 
     def send_command(self, command: str, params: Optional[Dict[str, str]] = None) -> Optional[ET.Element]:
         """Send command to VLC HTTP interface
