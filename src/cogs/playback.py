@@ -2220,6 +2220,12 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def pause(self, ctx):
         """Pause playback"""
+        if (
+            bool(getattr(Config, "ENABLE_VOICE_JOIN", False))
+            and bool(getattr(Config, "VOICE_AUTO_JOIN_ON_COMMAND", False))
+        ):
+            if not await self._check_room(ctx):
+                return
         if not await self._check_cooldown(ctx):
             return
 
