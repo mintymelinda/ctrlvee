@@ -171,6 +171,7 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 ### Playback
 
 - `!panel` — post a video-first playback panel using the existing TMDB-aware Now Playing artwork, metadata, playback state, and progress, alongside Previous, Play, Pause, Stop, Next, Restart, 10- and 30-second Rewind and Forward, Toggle Shuffle, View Queue, Add to Queue, and Manage Queue controls; Add to Queue opens a private playlist picker, while Manage Queue lets playback roles privately remove queued tracks, move them earlier/later, or clear all soft-queue tracking with confirmation; More Options opens private VLC-aware audio, subtitle, and playback-speed menus
+- Playback panel message references are stored in `PLAYBACK_PANEL_REGISTRY_PATH` (default `data/playback_panels.json`) and restored after restarts; keep that file on persistent storage if the bot runs in a container.
 - `!play`, `!pause`, `!stop`, `!restart`
 - `!next`, `!previous`
 - `!rewind [seconds]`, `!forward [seconds]`
