@@ -1694,9 +1694,12 @@ class VLCController:
                 continue
 
             old_playlist_id = info.get("playlist_item_id", info.get("item_id", queue_id))
+            media_uri = info.get("media_uri")
             current_leaf = live_by_id.get(str(old_playlist_id)) if old_playlist_id is not None else None
-            if current_leaf is not None:
-                if not info.get("media_uri") and current_leaf.get("uri"):
+            if current_leaf is not None and (
+                not media_uri or str(current_leaf.get("uri")) == str(media_uri)
+            ):
+                if not media_uri and current_leaf.get("uri"):
                     info["media_uri"] = current_leaf.get("uri")
                 info["playlist_item_id"] = str(current_leaf.get("id"))
                 info["item_id"] = str(current_leaf.get("id"))
@@ -1704,7 +1707,6 @@ class VLCController:
                     info["item_name"] = current_leaf.get("name")
                 continue
 
-            media_uri = info.get("media_uri")
             matches = live_by_uri.get(str(media_uri), []) if media_uri else []
             if len(matches) == 1:
                 replacement = matches[0]
