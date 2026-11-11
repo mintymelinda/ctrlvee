@@ -3143,6 +3143,14 @@ class QueueManageView(discord.ui.View):
             )
             return
 
+        allowed, reason = await self.cog._playback_guard(
+            interaction.user,
+            presence_only=True,
+        )
+        if not allowed:
+            await interaction.response.send_message(reason, ephemeral=True)
+            return
+
         await interaction.response.defer()
         try:
             if operation == "remove":
