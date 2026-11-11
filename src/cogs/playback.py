@@ -401,7 +401,13 @@ class PlaybackCommands(commands.Cog):
         except Exception as e:
             self.logger.debug(f"Voice channel status update failed: {e}")
 
-    async def _announce_now_playing(self, origin: str, item: ET.Element | None, position: int | None):
+    async def _announce_now_playing(
+        self,
+        origin: str,
+        item: ET.Element | None,
+        position: int | None,
+        expected_state: str | None = None,
+    ):
         """Unified Now Playing announcer with cooldown and de-duplication.
 
         origin: 'command' | 'monitor' | 'periodic'
@@ -503,12 +509,24 @@ class PlaybackCommands(commands.Cog):
                     final.add_field(name="Playlist", value=f"#{position}", inline=True)
                 except Exception:
                     pass
-            # Update presence
+            # Update presence. Monitor-origin announcements must revalidate after
+            # each Discord await so an older snapshot cannot publish over a newer
+            # manual selection.
             try:
                 await self._set_presence(display_name, reason=f"now playing ({origin})")
-                await self._set_voice_channel_status(display_name, state='playing', reason=f"now playing ({origin})")
+                if expected_state is not None and not await self._monitor_snapshot_is_current(
+                    item.get("id"), expected_state
+                ):
+                    return
+                await self._set_voice_channel_status(
+                    display_name, state=expected_state or 'playing', reason=f"now playing ({origin})"
+                )
             except Exception:
                 pass
+            if expected_state is not None and not await self._monitor_snapshot_is_current(
+                item.get("id"), expected_state
+            ):
+                return
             # Send to announce channels
             channel_ids = Config.get_announce_channel_ids()
             for channel_id in channel_ids or []:
@@ -892,6 +910,23 @@ class PlaybackCommands(commands.Cog):
             )
             await ctx.send(embed=embed)
         
+    async def _monitor_snapshot_is_current(
+        self, expected_item_id: str | None, expected_state: str
+    ) -> bool:
+        """Confirm a monitor snapshot still owns playback before publishing it."""
+        if expected_item_id is None:
+            return False
+        try:
+            confirmation = await self.vlc.run_async(
+                "get_current_item_if_unchanged", expected_item_id
+            )
+            return bool(
+                confirmation.get("success")
+                and confirmation.get("state") == expected_state
+            )
+        except Exception:
+            return False
+
     async def _monitor_vlc_state(self):
         """Background task to monitor VLC state changes"""
         await self.bot.wait_until_ready()
@@ -1058,16 +1093,11 @@ class PlaybackCommands(commands.Cog):
                             # The queue transition check may have been followed by a
                             # manual command. Reconfirm immediately before publishing
                             # presence or announcements from this monitor snapshot.
-                            if current_item_id:
-                                confirmation = await self.vlc.run_async(
-                                    "get_current_item_if_unchanged", current_item_id
-                                )
-                                if (
-                                    not confirmation.get("success")
-                                    or confirmation.get("state") != current_state
-                                ):
-                                    await asyncio.sleep(0.5)
-                                    continue
+                            if current_item_id and not await self._monitor_snapshot_is_current(
+                                current_item_id, current_state
+                            ):
+                                await asyncio.sleep(0.5)
+                                continue
 
                             # Get item name if available
                             item_name = None
@@ -1084,7 +1114,19 @@ class PlaybackCommands(commands.Cog):
                             try:
                                 if position_changed and item_name:
                                     await self._set_presence(item_name, reason="track change")
-                                    await self._set_voice_channel_status(item_name, state=current_state, reason="track change")
+                                    if current_item_id and not await self._monitor_snapshot_is_current(
+                                        current_item_id, current_state
+                                    ):
+                                        await asyncio.sleep(0.5)
+                                        continue
+                                    await self._set_voice_channel_status(
+                                        item_name, state=current_state, reason="track change"
+                                    )
+                                    if current_item_id and not await self._monitor_snapshot_is_current(
+                                        current_item_id, current_state
+                                    ):
+                                        await asyncio.sleep(0.5)
+                                        continue
                             except Exception:
                                 pass
                             
@@ -1111,7 +1153,10 @@ class PlaybackCommands(commands.Cog):
                             # Note: do not suppress by ID/name to allow manual selection announcements
                             elif channel_ids and (now_ts - self._last_command_announce_ts) > 1 and now_ts >= self._suppress_auto_announce_until:
                                 # Use unified announcer
-                                await self._announce_now_playing('monitor', current_item, current_position)
+                                await self._announce_now_playing(
+                                    'monitor', current_item, current_position,
+                                    expected_state=current_state,
+                                )
                             elif not channel_ids:
                                 self.logger.debug("Track change announcement skipped: No announcement channels configured.")
                             else:
