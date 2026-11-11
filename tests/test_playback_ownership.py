@@ -43,8 +43,10 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         view._dispatch = AsyncMock()
         interaction = Mock()
 
-        await view.rewind_button(interaction, Mock())
-        await view.forward_button(interaction, Mock())
+        rewind_button = next(button for button in view.children if button.label == "Rewind 10s")
+        forward_button = next(button for button in view.children if button.label == "Forward 10s")
+        await rewind_button.callback(interaction)
+        await forward_button.callback(interaction)
 
         view._dispatch.assert_has_awaits([
             call(interaction, "rewind", 10),
