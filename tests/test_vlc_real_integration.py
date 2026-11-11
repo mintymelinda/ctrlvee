@@ -126,20 +126,34 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.fail(f"Timed out waiting for {description}; last value: {last_value!r}")
 
     def load_playlist(self):
-        """Replace VLC's playlist with three independent integration fixtures."""
+        """Reset VLC and enqueue fixtures, waiting for each playlist mutation."""
         self.controller.stop()
         self.controller.send_command("pl_empty")
+        self.wait_for(
+            lambda: playlist
+            if (playlist := self.controller.get_playlist()) is not None
+            and not playlist.findall(".//leaf")
+            else None,
+            "VLC playlist to become empty",
+        )
         self.controller.clear_queue_tracking()
-        for media_path in self.media_paths:
-            self.assertTrue(self.controller.enqueue_path(str(media_path)))
 
-        def playlist_ready():
-            playlist = self.controller.get_playlist()
-            items = playlist.findall(".//leaf") if playlist is not None else []
-            return (playlist, items) if len(items) == len(self.media_paths) else None
+        item_ids = []
+        for index, media_path in enumerate(self.media_paths, start=1):
+            # VLC's HTTP interface can return an empty/ambiguous command response;
+            # the playlist itself is the authoritative acknowledgement.
+            self.controller.enqueue_path(str(media_path))
+            playlist, items = self.wait_for(
+                lambda: (playlist, items)
+                if (playlist := self.controller.get_playlist()) is not None
+                and len(items := playlist.findall(".//leaf")) >= index
+                else None,
+                f"fixture {index} to appear in VLC playlist",
+            )
+            item_ids.append(items[index - 1].get("id"))
 
-        playlist, items = self.wait_for(playlist_ready, "all three media fixtures in VLC")
-        return [item.get("id") for item in items]
+        self.assertTrue(all(item_ids), f"VLC returned invalid playlist IDs: {item_ids!r}")
+        return item_ids
 
     def wait_for_current_item(self, item_id):
         return self.wait_for(
@@ -186,7 +200,9 @@ class RealVLCIntegrationTests(unittest.TestCase):
             "repeat-current mode to disable",
         )
 
-        self.assertIsNotNone(self.controller.play_item(third_id))
+        # Verify the actual selected item; VLC command responses are not a
+        # reliable acknowledgement for every HTTP-interface command.
+        self.controller.play_item(third_id)
         self.wait_for_current_item(third_id)
 
     def test_real_vlc_shuffle_state_changes_are_observable(self):
@@ -196,7 +212,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         initial = self.controller.get_shuffle_state()
         self.assertIsInstance(initial, bool)
-        self.assertIsNotNone(self.controller.set_shuffle_state(not initial))
+        self.controller.set_shuffle_state(not initial)
         self.wait_for(
             lambda: self.controller.get_shuffle_state() is not initial,
             "shuffle state to change",
