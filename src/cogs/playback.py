@@ -4062,12 +4062,6 @@ class PlaybackControlView(discord.ui.View):
     async def forward_thirty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "forward", 30)
 
-    async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._dispatch(interaction, "shuffle_toggle")
-
-    async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._dispatch(interaction, "queue_status")
-
     async def advanced_options_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
