@@ -26,6 +26,20 @@ from src.cogs.playback import (
 
 
 class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pause_command_uses_requester_auto_join_guard_when_enabled(self):
+        vlc = SimpleNamespace(run_async=AsyncMock())
+        cog = PlaybackCommands(SimpleNamespace(), vlc, Mock(), Mock())
+        cog._check_room = AsyncMock(return_value=False)
+        ctx = SimpleNamespace()
+
+        with patch.object(Config, "ENABLE_VOICE_JOIN", True), patch.object(
+            Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
+        ):
+            await cog.pause(ctx)
+
+        cog._check_room.assert_awaited_once_with(ctx)
+        vlc.run_async.assert_not_awaited()
+
     async def test_playback_guard_joins_requesters_voice_channel_when_enabled(self):
         channel = SimpleNamespace(id=321)
         join_member_voice_channel = AsyncMock(return_value=(True, "joined"))
