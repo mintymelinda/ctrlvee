@@ -1724,7 +1724,7 @@ class VLCController:
                     info["item_name"] = replacement.get("name")
                 rebound_queue_ids.append(queue_id)
             elif len(matches) > 1:
-                info["stale_playlist_item_id"] = old_playlist_id
+                info["stale_playlist_item_id"] = info.get("stale_playlist_item_id", old_playlist_id)
                 info["playlist_item_id"] = None
                 info["item_id"] = None
                 info["unresolved_reason"] = "ambiguous_media_uri"
