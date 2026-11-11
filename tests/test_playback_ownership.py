@@ -311,7 +311,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         view._dispatch = AsyncMock()
         picker_view = QueuePlaylistView(view, [ET.Element("leaf", {"id": "vlc-42", "name": "Selected"})])
         picker = next(child for child in picker_view.children if isinstance(child, QueuePlaylistSelect))
-        picker.values = ["vlc-42"]
+        picker._values = ["vlc-42"]
         interaction = SimpleNamespace(
             user=SimpleNamespace(roles=[SimpleNamespace(id=1, name="DJ")]),
             response=SimpleNamespace(send_message=AsyncMock()),
@@ -666,7 +666,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
     def test_playlist_picker_pages_every_playlist_item(self):
         playlist_items = [
-            {"name": f"Video {index}"}
+            {"id": str(index), "name": f"Video {index}"}
             for index in range(1, 61)
         ]
         view = QueuePlaylistView(PlaybackControlView(Mock()), playlist_items)
@@ -701,7 +701,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([option.value for option in select.options], [str(i) for i in range(51, 61)])
 
     async def test_picker_page_navigation_keeps_navigation_controls(self):
-        playlist_items = [{"name": f"Video {index}"} for index in range(1, 31)]
+        playlist_items = [{"id": str(index), "name": f"Video {index}"} for index in range(1, 31)]
         view = QueuePlaylistView(PlaybackControlView(Mock()), playlist_items)
         interaction = SimpleNamespace(
             response=SimpleNamespace(edit_message=AsyncMock())
