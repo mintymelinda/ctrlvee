@@ -297,8 +297,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 "third": {"queue_order": 3, "item_name": "Third"},
                 "first": {"queue_order": 1, "item_name": "First"},
                 "second": {"queue_order": 2, "item_name": "Second"},
-            }        }
-        playlist = ET.fromstring(
+            }        }        playlist = ET.fromstring(
             '<playlist><leaf id="first" name="First Track"/>'
             '<leaf id="second" name="Second Track"/>'
             '<leaf id="third" name="Third Track"/></playlist>'
@@ -597,8 +596,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         cases = (
             (PlaybackAudioTrackSelect, [{"index": 3, "name": "English"}], "3", "audio_set", ("3",)),
             (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "2", "subtitle_set", ("2",)),            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "off", "subtitle_set", ("off",)),
-            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__next__", "subtitle_next", ()),
-            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__previous__", "subtitle_prev", ()),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__next__", "subtitle_next", ()),            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__previous__", "subtitle_prev", ()),
             (PlaybackSpeedSelect, [], "1.5", "speed", ("1.5",)),
         )
         for select_type, tracks, value, command, args in cases:
@@ -947,8 +945,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             view._dispatch.assert_awaited_once_with(interaction, command)
     async def test_management_menu_routes_queue_tools_to_existing_handlers(self):
         view = PlaybackControlView(Mock())
-        interaction = SimpleNamespace(
-            response=SimpleNamespace(send_message=AsyncMock())
+        interaction = SimpleNamespace(            response=SimpleNamespace(send_message=AsyncMock())
         )
         view.manage_queue_button = AsyncMock()
         view.add_to_queue_button = AsyncMock()
@@ -1243,3 +1240,50 @@ if __name__ == "__main__":
             "You don't have a role permitted to control playback.",
             ephemeral=True,
         )
+
+    async def test_registry_ignores_malformed_entries_and_uses_channel_fetch_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = f"{directory}/playback_panels.json"
+            with open(registry_path, "w", encoding="utf-8") as registry_file:
+                json.dump(
+                    [
+                        {"channel_id": 321},
+                        {"channel_id": "not-an-id", "message_id": 700},
+                        {"channel_id": 321, "message_id": 654},
+                    ],
+                    registry_file,
+                )
+
+            channel = SimpleNamespace(id=321)
+            panel_embed = discord.Embed(title="Video Playback")
+            panel_embed.set_footer(
+                text="Video playback controls and queue overview. Playback actions are restricted to permitted roles."
+            )
+            message = SimpleNamespace(
+                id=654,
+                author=SimpleNamespace(id=999),
+                embeds=[panel_embed],
+            )
+            channel.fetch_message = AsyncMock(return_value=message)
+            bot = SimpleNamespace(
+                user=SimpleNamespace(id=999),
+                get_channel=Mock(return_value=None),
+                fetch_channel=AsyncMock(return_value=channel),
+            )
+            cog = PlaybackCommands.__new__(PlaybackCommands)
+            cog.bot = bot
+            cog.logger = Mock()
+            cog._playback_panel_messages = {}
+            cog._playback_panel_registry_restored = False
+
+            with patch.object(Config, "PLAYBACK_PANEL_REGISTRY_PATH", registry_path):
+                await cog._restore_playback_panel_registry()
+                with open(registry_path, "r", encoding="utf-8") as registry_file:
+                    self.assertEqual(json.load(registry_file), [
+                        {"channel_id": 321, "message_id": 654}
+                    ])
+
+            bot.fetch_channel.assert_awaited_once_with(321)
+            channel.fetch_message.assert_awaited_once_with(654)
+            self.assertIs(cog._playback_panel_messages[654], message)
+            self.assertTrue(cog._playback_panel_registry_restored)
