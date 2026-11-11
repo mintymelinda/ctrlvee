@@ -247,7 +247,16 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     async def test_confirm_clear_queue_uses_serialized_tracking_clear(self):
         cog = Mock()
         cog._playback_guard = AsyncMock(return_value=(True, ""))
-        cog.vlc = SimpleNamespace(run_async=AsyncMock())
+        cog.vlc = SimpleNamespace(run_async=AsyncMock(return_value={
+            "success": True,
+            "removed_item_ids": [],
+            "preserved_item_ids": [],
+            "failed_item_ids": [],
+        }))
+        cog._scheduled_media_protection = Mock(return_value={
+            "protected_item_ids": set(),
+            "protected_uris": set(),
+        })
         cog.logger = Mock()
         view = QueueClearConfirmView(cog)
         interaction = SimpleNamespace(
@@ -258,10 +267,14 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
         await view.confirm_clear(interaction)
 
-        cog.vlc.run_async.assert_awaited_once_with("clear_queue_tracking")
+        cog.vlc.run_async.assert_awaited_once_with(
+            "clear_queue",
+            protected_item_ids=set(),
+            protected_uris=set(),
+        )
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         interaction.edit_original_response.assert_awaited_once()
-        self.assertIn("have been cleared", interaction.edit_original_response.await_args.kwargs["content"])
+        self.assertIn("has been cleared", interaction.edit_original_response.await_args.kwargs["content"])
         self.assertIsNone(interaction.edit_original_response.await_args.kwargs["view"])
 
     def test_queue_manager_preserves_queue_order_and_exposes_mutations(self):

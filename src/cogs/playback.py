@@ -2977,6 +2977,24 @@ class PlaybackCommands(commands.Cog):
             logger.error(f"Error in queue_next command: {e}")
             await ctx.send(f'Error queuing item: {str(e)}')
 
+    def _scheduled_media_protection(self):
+        """Snapshot scheduled playlist identities that queue cleanup must preserve."""
+        get_cog = getattr(self.bot, "get_cog", None)
+        scheduler = get_cog("Scheduler") if callable(get_cog) else None
+        schedules = getattr(scheduler, "scheduled", ()) if scheduler is not None else ()
+        item_ids = set()
+        uris = set()
+        for schedule in schedules:
+            if not isinstance(schedule, dict):
+                continue
+            target_item_id = schedule.get("target_item_id")
+            if target_item_id is not None:
+                item_ids.add(str(target_item_id))
+            uri = schedule.get("uri")
+            if uri:
+                uris.add(str(uri))
+        return {"protected_item_ids": item_ids, "protected_uris": uris}
+
     async def queue_playlist_item_by_id(self, ctx, item_id: str):
         """Queue the exact playlist item selected by the interactive picker."""
         allowed, reason = await self._playback_guard(ctx.author)
@@ -3081,15 +3099,28 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            await self.vlc.run_async("clear_queue_tracking")
+            result = await self.vlc.run_async(
+                "clear_queue",
+                **self._scheduled_media_protection(),
+            )
+            if not result.get("success"):
+                raise RuntimeError(
+                    f"Queue cleanup incomplete: {result.get('failed_item_ids', [])}"
+                )
+            preserved_count = len(result.get("preserved_item_ids", []))
             embed = discord.Embed(
                 title="🗑️ Queue Cleared",
-                description="All queue tracking has been cleared",
+                description=(
+                    "Queued media and its queue tracking have been reconciled. "
+                    f"Preserved {preserved_count} current or scheduled item(s)."
+                    if preserved_count else
+                    "Queued media and its queue tracking have been reconciled."
+                ),
                 color=discord.Color.orange()
             )
             embed.add_field(
                 name="Note",
-                value="This only clears tracking data. Items already moved in the playlist remain in their positions.",
+                value="The current item and scheduled media are preserved; unrelated playlist entries are untouched.",
                 inline=False
             )
             await ctx.send(embed=embed)
@@ -3116,10 +3147,10 @@ class PlaybackCommands(commands.Cog):
         try:
             if ref.startswith('#'):
                 num = int(ref[1:])
-                result = await self.vlc.run_async("remove_from_queue_by_playlist_number", num)
+                result = await self.vlc.run_async("remove_from_queue_by_playlist_number", num, **self._scheduled_media_protection())
             else:
                 num = int(ref)
-                result = await self.vlc.run_async("remove_from_queue_by_order", num)
+                result = await self.vlc.run_async("remove_from_queue_by_order", num, **self._scheduled_media_protection())
 
             if not result.get('success'):
                 await ctx.send(f"❌ {result.get('error', 'Failed to remove from queue')}")
@@ -3711,6 +3742,7 @@ class QueueManageView(discord.ui.View):
                 result = await self.cog.vlc.run_async(
                     "remove_from_queue_by_id",
                     self.selected_queue_item_id,
+                    **self.cog._scheduled_media_protection(),
                 )
             else:
                 result = await self.cog.vlc.run_async(
@@ -3818,12 +3850,21 @@ class QueueClearConfirmView(discord.ui.View):
 
         await interaction.response.defer(ephemeral=True)
         try:
-            await self.cog.vlc.run_async("clear_queue_tracking")
+            result = await self.cog.vlc.run_async(
+                "clear_queue",
+                **self.cog._scheduled_media_protection(),
+            )
+            if not result.get("success"):
+                raise RuntimeError(
+                    f"Queue cleanup incomplete: {result.get('failed_item_ids', [])}"
+                )
+            preserved_count = len(result.get("preserved_item_ids", []))
+            preserved_note = (
+                f" Preserved {preserved_count} current or scheduled playlist item(s)."
+                if preserved_count else ""
+            )
             await interaction.edit_original_response(
-                content=(
-                    "The soft queue and shuffle-restoration tracking have been cleared. "
-                    "Items already in the VLC playlist remain in place."
-                ),
+                content=f"The soft queue has been cleared and safe VLC entries removed.{preserved_note}",
                 view=None,
             )
         except Exception:
