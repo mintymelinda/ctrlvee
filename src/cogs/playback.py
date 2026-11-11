@@ -1866,16 +1866,14 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
 
-        status = await self.vlc.run_async("get_status")
-        if not status:
+        play_result = await self.vlc.run_async("play_if_not_playing")
+        if not play_result["available"]:
             await ctx.send('Error: Could not access VLC')
             return
-
-        state = status.find('state').text
-        if state == 'playing':
+        if not play_result["command_sent"]:
             return
 
-        if await self.vlc.run_async("play"):
+        if play_result["command_sent"]:
             await asyncio.sleep(0.5)
             new_status = await self.vlc.run_async("get_status")
             if new_status and new_status.find('state').text == 'playing':
@@ -1896,16 +1894,14 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
 
-        status = await self.vlc.run_async("get_status")
-        if not status:
+        pause_result = await self.vlc.run_async("pause_if_playing")
+        if not pause_result["available"]:
             await ctx.send('Error: Could not access VLC')
             return
-
-        state = status.find('state').text
-        if state != 'playing':
+        if not pause_result["command_sent"]:
             return
 
-        if await self.vlc.run_async("pause"):
+        if pause_result["command_sent"]:
             await asyncio.sleep(0.5)
             new_status = await self.vlc.run_async("get_status")
             if new_status and new_status.find('state').text == 'paused':
@@ -2028,24 +2024,22 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send(reason)
                 return
 
-            playlist = await self.vlc.run_async("get_playlist")
-            if not playlist:
-                await ctx.send('Could not access VLC playlist')
+            selection = await self.vlc.run_async("play_playlist_item_at_position", number)
+            if not selection["success"]:
+                error = selection.get("error")
+                if error == "playlist_unavailable":
+                    await ctx.send('Could not access VLC playlist')
+                elif error == "playlist_empty":
+                    await ctx.send('Playlist is empty')
+                elif error == "position_out_of_range":
+                    await ctx.send(f'Number too high. Playlist has {selection["playlist_count"]} items')
+                else:
+                    await ctx.send('Error: Could not start playback')
                 return
+            item = selection["item"]
+            item_id = selection["item_id"]
 
-            items = playlist.findall('.//leaf')
-            if not items:
-                await ctx.send('Playlist is empty')
-                return
-
-            if number > len(items):
-                await ctx.send(f'Number too high. Playlist has {len(items)} items')
-                return
-
-            item = items[number - 1]
-            item_id = item.get('id')
-
-            if await self.vlc.run_async("play_item", item_id):
+            if selection["success"]:
                 self._seat_playback_owner(ctx.author, item_id)
                 logger.info(f"Loading playlist item #{number}")
                 await ctx.send(f'Loading item #{number}...')
@@ -2093,36 +2087,31 @@ class PlaybackCommands(commands.Cog):
             await ctx.send(reason)
             return
 
-        # First check if there are any queued items to play
-        next_queued = await self.vlc.run_async("get_next_queued_item")
-        if next_queued:
-            logger.info(f"Playing next queued item: {next_queued['item_name']}")
-            result = await self.vlc.run_async("play_next_queued_item")
-            
-            if result.get("success"):
-                embed = discord.Embed(
-                    title="🎵 Playing Queued Item",
-                    description=f"Now playing: **{result['item_name']}**",
-                    color=discord.Color.green()
-                )
-                embed.add_field(
-                    name="Queue Info",
-                    value=f"This was queued item #{result.get('queue_order', 'unknown')}",
-                    inline=True
-                )
-                await ctx.send(embed=embed)
-                # Update bot presence to the queued item's name (if enabled)
-                try:
-                    await self._set_presence(result.get('item_name'), reason="next (queued)")
-                except Exception:
-                    pass
-                return
-            else:
-                await ctx.send(f"Error playing queued item: {result.get('error', 'Unknown error')}")
-                # Fall through to normal next behavior
-        
-        # If no queued items or queue failed, use normal next behavior
-        if await self.vlc.run_async("next"):
+        # Resolve the queue and issue the selected playback command atomically.
+        decision = await self.vlc.run_async("play_next_or_advance")
+        queued_result = decision.get("queued_result")
+        if queued_result and queued_result.get("success"):
+            result = queued_result
+            embed = discord.Embed(
+                title="🎵 Playing Queued Item",
+                description=f"Now playing: **{result['item_name']}**",
+                color=discord.Color.green()
+            )
+            embed.add_field(
+                name="Queue Info",
+                value=f"This was queued item #{result.get('queue_order', 'unknown')}",
+                inline=True
+            )
+            await ctx.send(embed=embed)
+            try:
+                await self._set_presence(result.get('item_name'), reason="next (queued)")
+            except Exception:
+                pass
+            return
+        if queued_result:
+            await ctx.send(f"Error playing queued item: {queued_result.get('error', 'Unknown error')}")
+
+        if decision.get("next_success"):
             logger.info("Loading next track")
             await ctx.send('Loading next track...')
             try:
@@ -2547,26 +2536,20 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send(reason)
                 return
 
-            playlist = await self.vlc.run_async("get_playlist")
-            if not playlist:
-                await ctx.send('Could not access VLC playlist')
+            result = await self.vlc.run_async("queue_playlist_item_at_position", number)
+            if not result.get("success"):
+                error = result.get("error")
+                if error == "playlist_unavailable":
+                    await ctx.send('Could not access VLC playlist')
+                elif error == "playlist_empty":
+                    await ctx.send('Playlist is empty')
+                elif error == "position_out_of_range":
+                    await ctx.send(f'Number too high. Playlist has {result["playlist_count"]} items')
+                else:
+                    await ctx.send(f'Error queuing item: {result.get("error", "Unknown error")}')
                 return
-
-            items = playlist.findall('.//leaf')
-            if not items:
-                await ctx.send('Playlist is empty')
-                return
-
-            if number > len(items):
-                await ctx.send(f'Number too high. Playlist has {len(items)} items')
-                return
-
-            item = items[number - 1]
-            item_id = item.get('id')
-            item_name = item.get('name', 'Unknown')
-
-            # Queue the item
-            result = await self.vlc.run_async("queue_item_next", item_id)
+            item_id = result["item_id"]
+            item_name = result["item_name"]
             
             if result.get("success"):
                 embed = discord.Embed(
@@ -2600,7 +2583,7 @@ class PlaybackCommands(commands.Cog):
     async def queue_status(self, ctx):
         """Show current soft queue status and shuffle state"""
         try:
-            queue_status = await self.vlc.run_async("get_queue_status")
+            queue_status, playlist = await self.vlc.run_async("get_queue_snapshot")
             shuffle_on = queue_status.get("shuffle_currently_on", False)
             
             embed = discord.Embed(
@@ -2617,7 +2600,6 @@ class PlaybackCommands(commands.Cog):
             # Active queued items
             if queued_items:
                 # Get playlist to map item IDs to titles and positions
-                playlist = await self.vlc.run_async("get_playlist")
                 playlist_map = {}
                 if playlist:
                     for idx, item in enumerate(playlist.findall('.//leaf'), 1):
@@ -2740,8 +2722,12 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            current_shuffle = await self.vlc.run_async("get_shuffle_state")
-            
+            shuffle_result = await self.vlc.run_async("set_shuffle_state", True)
+            current_shuffle = shuffle_result["previous"]
+            if not shuffle_result["success"]:
+                await ctx.send("❌ Could not update VLC shuffle mode.")
+                return
+
             if current_shuffle:
                 embed = discord.Embed(
                     title="🔀 Shuffle Already On",
@@ -2750,7 +2736,6 @@ class PlaybackCommands(commands.Cog):
                 )
             else:
                 # Enable shuffle
-                await self.vlc.run_async("toggle_shuffle")
                 embed = discord.Embed(
                     title="🔀 Shuffle Enabled",
                     description="Shuffle mode has been turned on",
@@ -2772,8 +2757,12 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            current_shuffle = await self.vlc.run_async("get_shuffle_state")
-            
+            shuffle_result = await self.vlc.run_async("set_shuffle_state", False)
+            current_shuffle = shuffle_result["previous"]
+            if not shuffle_result["success"]:
+                await ctx.send("❌ Could not update VLC shuffle mode.")
+                return
+
             if not current_shuffle:
                 embed = discord.Embed(
                     title="▶️ Shuffle Already Off",
@@ -2782,7 +2771,6 @@ class PlaybackCommands(commands.Cog):
                 )
             else:
                 # Disable shuffle
-                await self.vlc.run_async("toggle_shuffle")
                 embed = discord.Embed(
                     title="▶️ Shuffle Disabled",
                     description="Shuffle mode has been turned off",
@@ -2804,11 +2792,12 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            current_shuffle = await self.vlc.run_async("get_shuffle_state")
-            
-            # Toggle shuffle
-            await self.vlc.run_async("toggle_shuffle")
-            new_shuffle = not current_shuffle
+            shuffle_result = await self.vlc.run_async("toggle_shuffle_state")
+            if not shuffle_result["success"]:
+                await ctx.send("❌ Could not update VLC shuffle mode.")
+                return
+            current_shuffle = shuffle_result["previous"]
+            new_shuffle = shuffle_result["enabled"]
             
             if new_shuffle:
                 embed = discord.Embed(
