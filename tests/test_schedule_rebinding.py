@@ -572,7 +572,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._save_schedule_backup.return_value = True
 
         operation = asyncio.create_task(scheduler._pre_announce_schedule(schedule))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         acquired = False
         try:
             await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
@@ -607,7 +607,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await scheduler._announce_schedule_started(schedule)
 
         operation = asyncio.create_task(announce())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         acquired = False
         try:
             await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
@@ -642,7 +642,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await scheduler._announce_schedule_started(schedule)
 
         announcement = asyncio.create_task(announce())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         ctx = Mock()
         ctx.send = AsyncMock()
         removal = asyncio.create_task(Scheduler.unschedule.callback(scheduler, ctx, 1))
@@ -697,17 +697,29 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         current.set("current", "current")
 
         async def run_async(method_name, *args, **kwargs):
-            if method_name == "play_item_and_confirm":
+            if method_name == "get_playback_snapshot":
+                playlist = ET.Element("playlist")
+                current = leaf("Current.mkv")
+                current.set("current", "current")
+                playlist.append(current)
+                playlist.append(leaf("Heat (1995).mkv"))
+                return ET.fromstring("<root><state>playing</state></root>"), playlist
+            if method_name == "play_scheduled_item_if_unchanged":
                 entered.set()
                 await release.wait()
-                return object(), True, None
+                return {
+                    "success": True,
+                    "confirmed": True,
+                    "reason": "confirmed",
+                    "source_item_id": "Current.mkv",
+                }
             return getattr(vlc, method_name)(*args, **kwargs)
 
         vlc.run_async = AsyncMock(side_effect=run_async)
         operation = asyncio.create_task(
             scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
         )
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         acquired = False
         try:
             await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
