@@ -3099,10 +3099,23 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            await self.vlc.run_async("clear_queue", **self._scheduled_media_protection())
+            result = await self.vlc.run_async(
+                "clear_queue",
+                **self._scheduled_media_protection(),
+            )
+            if not result.get("success"):
+                raise RuntimeError(
+                    f"Queue cleanup incomplete: {result.get('failed_item_ids', [])}"
+                )
+            preserved_count = len(result.get("preserved_item_ids", []))
             embed = discord.Embed(
                 title="🗑️ Queue Cleared",
-                description="Queued media and its queue tracking have been reconciled.",
+                description=(
+                    "Queued media and its queue tracking have been reconciled. "
+                    f"Preserved {preserved_count} current or scheduled item(s)."
+                    if preserved_count else
+                    "Queued media and its queue tracking have been reconciled."
+                ),
                 color=discord.Color.orange()
             )
             embed.add_field(
