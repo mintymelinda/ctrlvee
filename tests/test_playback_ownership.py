@@ -126,13 +126,21 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
     def test_playback_panel_exposes_queue_and_shuffle_buttons(self):
         view = PlaybackControlView(Mock())
-        labels = {button.label for button in view.children}
-        self.assertTrue({"Previous", "Play", "Pause", "Stop", "Next", "Restart"}.issubset(labels))
-        self.assertTrue({"Toggle Shuffle", "View Queue"}.issubset(labels))
+        labels = {
+            button.label for button in view.children
+            if isinstance(button, discord.ui.Button)
+        }
+        self.assertTrue({"Previous", "Play", "Pause", "Stop", "Next"}.issubset(labels))
+        self.assertNotIn("Restart", labels)
+        menu = next(child for child in view.children if isinstance(child, discord.ui.Select))
+        self.assertTrue({"shuffle", "view_queue"}.issubset({option.value for option in menu.options}))
 
     def test_playback_panel_exposes_seek_buttons(self):
         view = PlaybackControlView(Mock())
-        labels = {button.label for button in view.children}
+        labels = {
+            button.label for button in view.children
+            if isinstance(button, discord.ui.Button)
+        }
         self.assertTrue({"Rewind 10s", "Forward 10s", "Rewind 30s", "Forward 30s"}.issubset(labels))
 
     async def test_seek_buttons_dispatch_fixed_ten_second_offsets(self):
@@ -141,7 +149,10 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         view._dispatch = AsyncMock()
         interaction = Mock()
 
-        buttons = {button.label: button for button in view.children}
+        buttons = {
+            button.label: button for button in view.children
+            if isinstance(button, discord.ui.Button)
+        }
         for label in ("Rewind 10s", "Forward 10s", "Rewind 30s", "Forward 30s"):
             await buttons[label].callback(interaction)
 
@@ -154,11 +165,13 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
     def test_playback_panel_exposes_add_to_queue_button(self):
         view = PlaybackControlView(Mock())
-        self.assertIn("Add to Queue", {button.label for button in view.children})
+        menu = next(child for child in view.children if isinstance(child, discord.ui.Select))
+        self.assertIn("add_to_queue", {option.value for option in menu.options})
 
     def test_playback_panel_exposes_manage_queue_button(self):
         view = PlaybackControlView(Mock())
-        self.assertIn("Manage Queue", {button.label for button in view.children})
+        menu = next(child for child in view.children if isinstance(child, discord.ui.Select))
+        self.assertIn("manage_queue", {option.value for option in menu.options})
 
     async def test_playback_panel_reuses_video_status_embed_and_adds_queue_overview(self):
         embed = Mock()
