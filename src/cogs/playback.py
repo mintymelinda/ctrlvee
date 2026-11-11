@@ -3452,7 +3452,7 @@ class QueueClearConfirmView(discord.ui.View):
 
 
 class PlaybackControlView(discord.ui.View):
-    """Short-lived interactive panel that delegates to existing guarded commands."""
+    """Persistent interactive panel that delegates to existing guarded commands."""
 
     def __init__(self, cog: PlaybackCommands):
         super().__init__(timeout=None)
