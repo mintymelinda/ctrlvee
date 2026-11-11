@@ -334,6 +334,7 @@ class PlaySearchView(discord.ui.View):
             return
 
         if playback_cog:
+            playback_cog._command_initiated_item_id = str(item_id)
             playback_cog._seat_playback_owner(interaction.user, item_id)
 
         self.stop()
