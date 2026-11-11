@@ -142,7 +142,7 @@ class VLCController:
             return {"success": False, "error": "item_id_missing"}
         return {"success": bool(self.play_item(item_id)), "item": item, "item_id": item_id, "playlist_count": len(items)}
 
-    def resume_selected_item_if_current(self, expected_item_id: str):
+    def resume_selected_item_if_current(self, expected_item_id: str, resume: bool = True):
         """Resume only the playlist item selected by the caller, if it is still current.
 
         Delayed command recovery must not use the generic pl_play command: another
@@ -171,6 +171,8 @@ class VLCController:
         state = status.findtext("state")
         if state == "playing":
             return {"success": True, "reason": "already_playing", "state": state}
+        if not resume:
+            return {"success": False, "reason": "not_playing", "state": state}
 
         result = self.play_item(expected_item_id)
         return {
