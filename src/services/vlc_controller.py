@@ -1635,6 +1635,43 @@ class VLCController:
             self.logger.error(f"remove_from_queue_by_order error: {e}")
             return {"success": False, "error": str(e)}
 
+    def move_queue_item_by_order(self, queue_order: int, direction: str):
+        """Move a queued item one position earlier or later and persist the order."""
+        try:
+            if direction not in ("up", "down"):
+                return {"success": False, "error": "Direction must be 'up' or 'down'"}
+
+            self._compact_queue_order()
+            ordered_items = sorted(
+                self._queued_items.items(),
+                key=lambda entry: entry[1].get("queue_order", 0),
+            )
+            current_index = int(queue_order) - 1
+            if current_index < 0 or current_index >= len(ordered_items):
+                return {"success": False, "error": f"Queue order {queue_order} not found"}
+
+            target_index = current_index - 1 if direction == "up" else current_index + 1
+            if target_index < 0 or target_index >= len(ordered_items):
+                return {"success": False, "error": "That item is already at the queue boundary"}
+
+            item_id, item_info = ordered_items[current_index]
+            neighbor_id, neighbor_info = ordered_items[target_index]
+            item_info["queue_order"], neighbor_info["queue_order"] = (
+                neighbor_info["queue_order"],
+                item_info["queue_order"],
+            )
+            self._save_queue_backup()
+            return {
+                "success": True,
+                "item_id": item_id,
+                "item_name": item_info.get("item_name", "Unknown"),
+                "queue_order": item_info["queue_order"],
+                "swapped_with": neighbor_id,
+            }
+        except Exception as e:
+            self.logger.error(f"move_queue_item_by_order error: {e}")
+            return {"success": False, "error": str(e)}
+
     def remove_from_queue_by_playlist_number(self, number: int):
         """Remove a queued item by its playlist number (1-based)."""
         try:
