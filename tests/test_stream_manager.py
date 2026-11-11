@@ -49,7 +49,7 @@ class StreamManagerPersistenceTests(unittest.TestCase):
             )
             self.assertEqual(
                 json.loads(path.read_text(encoding="utf-8")),
-                {"456": {"user_id": 789, "channel_id": 321}},
+                {"456": {"user_id": 789, "host_user_id": 790, "channel_id": 321}},
             )
 
     def test_legacy_assignment_defaults_host_to_manager(self):
