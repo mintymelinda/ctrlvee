@@ -2057,18 +2057,20 @@ class PlaybackCommands(commands.Cog):
         """Resolve previously registered panel messages after Discord is ready."""
         if self._playback_panel_registry_restored:
             return
-        self._playback_panel_registry_restored = True
         path = self._playback_panel_registry_path()
         try:
             with open(path, "r", encoding="utf-8") as registry_file:
                 entries = json.load(registry_file)
         except FileNotFoundError:
+            self._playback_panel_registry_restored = True
             return
         except (OSError, json.JSONDecodeError):
+            self._playback_panel_registry_restored = True
             self.logger.exception("Could not read playback panel registry")
             return
 
         if not isinstance(entries, list):
+            self._playback_panel_registry_restored = True
             self.logger.warning("Ignoring invalid playback panel registry format")
             return
 
@@ -2100,6 +2102,9 @@ class PlaybackCommands(commands.Cog):
 
         self._playback_panel_messages.update(restored)
         self._save_playback_panel_registry(extra_entries=unresolved)
+        # Keep retrying transient Discord API failures on later refresh cycles.
+        # Permanently missing or inaccessible messages are discarded above.
+        self._playback_panel_registry_restored = not unresolved
 
     async def _refresh_playback_panels(self) -> None:
         """Refresh registered panel messages without issuing playback commands."""
@@ -2145,6 +2150,8 @@ class PlaybackCommands(commands.Cog):
         while not self.bot.is_closed():
             await asyncio.sleep(interval)
             try:
+                if not self._playback_panel_registry_restored:
+                    await self._restore_playback_panel_registry()
                 await self._refresh_playback_panels()
             except asyncio.CancelledError:
                 raise
