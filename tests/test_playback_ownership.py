@@ -47,7 +47,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             queue_status,
             ET.fromstring('<playlist><leaf id="track" name="Track"/></playlist>'),
         )
-        self.assertIn("Clear Queue", {child.label for child in view.children})
+        self.assertIn("Clear Queue", {child.label for child in view.children if hasattr(child, "label")})
 
         confirm_view = QueueClearConfirmView(Mock())
         self.assertEqual(
