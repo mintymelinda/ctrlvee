@@ -15,6 +15,7 @@ from src.cogs.playback import (
     PlaybackSpeedSelect,
     QueueClearConfirmView,
     QueuePlaylistSelect,
+    QueuePlaylistView,
     QueueManageView,
     _decide_playback_allow,
     _member_has_allowed_role,
@@ -589,6 +590,79 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             allowed, reason = await cog._playback_guard(requester)
         self.assertFalse(allowed)
         self.assertIn("VOICE_JOIN_CHANNEL_ID", reason)
+
+
+    def test_playlist_picker_pages_every_playlist_item(self):
+        playlist_items = [
+            {"name": f"Video {index}"}
+            for index in range(1, 61)
+        ]
+        view = QueuePlaylistView(PlaybackControlView(Mock()), playlist_items)
+
+        select = next(child for child in view.children if isinstance(child, QueuePlaylistSelect))
+        self.assertEqual(view.page_count, 3)
+        self.assertEqual([option.value for option in select.options], [str(i) for i in range(1, 26)])
+        self.assertTrue(view.previous_button.disabled)
+        self.assertFalse(view.next_button.disabled)
+
+        view.page = 2
+        select = QueuePlaylistSelect(view)
+        self.assertEqual([option.value for option in select.options], [str(i) for i in range(51, 61)])
+
+    def test_queue_manager_pages_every_queued_item(self):
+        queued_items = {
+            str(index): {"queue_order": index, "item_name": f"Queued {index}"}
+            for index in range(1, 61)
+        }
+        view = QueueManageView(
+            Mock(),
+            {"queued_items": queued_items},
+            ET.fromstring("<playlist />"),
+        )
+
+        select = next(child for child in view.children if isinstance(child, discord.ui.Select))
+        self.assertEqual(view.page_count, 3)
+        self.assertEqual([option.value for option in select.options], [str(i) for i in range(1, 26)])
+
+        view.page = 2
+        select = QueueManageSelect(view)
+        self.assertEqual([option.value for option in select.options], [str(i) for i in range(51, 61)])
+
+    async def test_picker_page_navigation_keeps_navigation_controls(self):
+        playlist_items = [{"name": f"Video {index}"} for index in range(1, 31)]
+        view = QueuePlaylistView(PlaybackControlView(Mock()), playlist_items)
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(edit_message=AsyncMock())
+        )
+
+        await view._change_page(interaction, 1)
+
+        self.assertEqual(view.page, 1)
+        self.assertEqual(
+            {child.label for child in view.children if isinstance(child, discord.ui.Button)},
+            {"Previous", "Page 2/2", "Next"},
+        )
+        self.assertTrue(view.next_button.disabled)
+        interaction.response.edit_message.assert_awaited_once()
+
+    async def test_queue_manager_page_navigation_keeps_action_controls(self):
+        queued_items = {
+            str(index): {"queue_order": index, "item_name": f"Queued {index}"}
+            for index in range(1, 31)
+        }
+        view = QueueManageView(Mock(), {"queued_items": queued_items}, ET.fromstring("<playlist />"))
+        interaction = SimpleNamespace(
+            response=SimpleNamespace(edit_message=AsyncMock())
+        )
+
+        await view._change_page(interaction, 1)
+
+        labels = {child.label for child in view.children if isinstance(child, discord.ui.Button)}
+        self.assertEqual(view.page, 1)
+        self.assertTrue({"Previous", "Page 2/2", "Next", "Remove", "Move Earlier", "Move Later", "Clear Queue"}.issubset(labels))
+        self.assertTrue(view.next_button.disabled)
+        self.assertTrue(view.remove_selected_button.disabled)
+        interaction.response.edit_message.assert_awaited_once()
 
 
 if __name__ == "__main__":
