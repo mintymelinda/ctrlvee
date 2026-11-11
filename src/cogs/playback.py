@@ -3029,12 +3029,24 @@ class PlaybackControlView(discord.ui.View):
                 )
 
         command = getattr(self.cog, command_name)
-        await command.callback(self.cog, InteractionContext(interaction))
-        if interaction.message is not None:
-            await interaction.message.edit(
-                embed=await self.cog._playback_panel_embed(),
-                view=self,
+        try:
+            await command.callback(self.cog, InteractionContext(interaction))
+        except Exception:
+            self.cog.logger.exception("Playback panel action failed: %s", command_name)
+            await interaction.followup.send(
+                "That playback action failed. Check the bot logs for details.",
+                ephemeral=True,
             )
+            return
+
+        if interaction.message is not None:
+            try:
+                await interaction.message.edit(
+                    embed=await self.cog._playback_panel_embed(),
+                    view=self,
+                )
+            except discord.HTTPException:
+                self.cog.logger.debug("Could not refresh playback panel message")
 
     @discord.ui.button(label="Previous", emoji="⏮️", style=discord.ButtonStyle.secondary, row=0)
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
