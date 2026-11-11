@@ -326,6 +326,47 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             "vlc-42",
         )
 
+    async def test_refresh_playback_panels_updates_registered_message(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog.logger = Mock()
+        message = SimpleNamespace(id=123, edit=AsyncMock())
+        cog._playback_panel_messages = {123: message}
+        embed = discord.Embed(title="Now Playing: Updated")
+        cog._playback_panel_embed = AsyncMock(return_value=embed)
+
+        await PlaybackCommands._refresh_playback_panels(cog)
+
+        cog._playback_panel_embed.assert_awaited_once_with()
+        message.edit.assert_awaited_once()
+        self.assertEqual(message.edit.await_args.kwargs["embed"], embed)
+        self.assertIsInstance(
+            message.edit.await_args.kwargs["view"],
+            PlaybackControlView,
+        )
+
+    async def test_refresh_playback_panels_skips_status_work_without_panels(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog._playback_panel_messages = {}
+        cog._playback_panel_embed = AsyncMock()
+
+        await PlaybackCommands._refresh_playback_panels(cog)
+
+        cog._playback_panel_embed.assert_not_awaited()
+
+    async def test_playback_panel_registers_message_for_live_refresh(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog._playback_panel_messages = {}
+        cog._playback_panel_embed = AsyncMock(
+            return_value=discord.Embed(title="Now Playing: Current")
+        )
+        message = SimpleNamespace(id=456)
+        context = SimpleNamespace(send=AsyncMock(return_value=message))
+
+        await PlaybackCommands.playback_panel.callback(cog, context)
+
+        self.assertIs(cog._playback_panel_messages[456], message)
+        context.send.assert_awaited_once()
+
     async def test_playback_panel_embed_summarizes_soft_queue_and_shuffle(self):
         cog = PlaybackCommands.__new__(PlaybackCommands)
         status_embed = discord.Embed(title="Now Playing: Current")
