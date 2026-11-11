@@ -3914,12 +3914,37 @@ class QueueClearConfirmView(discord.ui.View):
         )
 
 
+class PlaybackManagementSelect(discord.ui.Select):
+    """Compact persistent menu for less-frequent playback management actions."""
+
+    def __init__(self, view: "PlaybackControlView"):
+        self.playback_view = view
+        super().__init__(
+            placeholder="Management and playback options",
+            min_values=1,
+            max_values=1,
+            row=2,
+            custom_id="ctrlvee:panel:management",
+            options=[
+                discord.SelectOption(label="View Queue", value="view_queue", emoji="📋"),
+                discord.SelectOption(label="Manage Queue", value="manage_queue", emoji="🛠️"),
+                discord.SelectOption(label="Add Media to Queue", value="add_to_queue", emoji="➕"),
+                discord.SelectOption(label="Toggle Shuffle", value="shuffle", emoji="🔀"),
+                discord.SelectOption(label="Advanced Options", value="advanced", emoji="⚙️"),
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self.playback_view._handle_management_action(interaction, self.values[0])
+
+
 class PlaybackControlView(discord.ui.View):
     """Persistent interactive panel that delegates to existing guarded commands."""
 
     def __init__(self, cog: PlaybackCommands):
         super().__init__(timeout=None)
         self.cog = cog
+        self.add_item(PlaybackManagementSelect(self))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
@@ -3929,6 +3954,27 @@ class PlaybackControlView(discord.ui.View):
             )
             return False
         return True
+
+    async def _handle_management_action(
+        self,
+        interaction: discord.Interaction,
+        action: str,
+    ) -> None:
+        handlers = {
+            "view_queue": lambda: self._dispatch(interaction, "queue_status"),
+            "manage_queue": lambda: self.manage_queue_button(interaction, None),
+            "add_to_queue": lambda: self.add_to_queue_button(interaction, None),
+            "shuffle": lambda: self._dispatch(interaction, "shuffle_toggle"),
+            "advanced": lambda: self.advanced_options_button(interaction, None),
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            await interaction.response.send_message(
+                "That management option is not available.",
+                ephemeral=True,
+            )
+            return
+        await handler()
 
     async def _dispatch(
         self,
@@ -4000,10 +4046,6 @@ class PlaybackControlView(discord.ui.View):
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "next_track")
 
-    @discord.ui.button(label="Restart", emoji="🔁", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:restart")
-    async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._dispatch(interaction, "restart")
-
     @discord.ui.button(label="Rewind 10s", emoji="⏪", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:rewind-10s")
     async def rewind_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "rewind", 10)
@@ -4012,23 +4054,14 @@ class PlaybackControlView(discord.ui.View):
     async def forward_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "forward", 10)
 
-    @discord.ui.button(label="Rewind 30s", emoji="⏪", style=discord.ButtonStyle.secondary, row=2, custom_id="ctrlvee:panel:rewind-30s")
+    @discord.ui.button(label="Rewind 30s", emoji="⏪", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:rewind-30s")
     async def rewind_thirty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "rewind", 30)
 
-    @discord.ui.button(label="Forward 30s", emoji="⏩", style=discord.ButtonStyle.secondary, row=2, custom_id="ctrlvee:panel:forward-30s")
+    @discord.ui.button(label="Forward 30s", emoji="⏩", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:forward-30s")
     async def forward_thirty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "forward", 30)
 
-    @discord.ui.button(label="Toggle Shuffle", emoji="🔀", style=discord.ButtonStyle.primary, row=1, custom_id="ctrlvee:panel:toggle-shuffle")
-    async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._dispatch(interaction, "shuffle_toggle")
-
-    @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:view-queue")
-    async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._dispatch(interaction, "queue_status")
-
-    @discord.ui.button(label="More Options", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2, custom_id="ctrlvee:panel:more-options")
     async def advanced_options_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -4057,7 +4090,6 @@ class PlaybackControlView(discord.ui.View):
                 ephemeral=True,
             )
 
-    @discord.ui.button(label="Manage Queue", emoji="🛠️", style=discord.ButtonStyle.primary, row=2, custom_id="ctrlvee:panel:manage-queue")
     async def manage_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -4085,7 +4117,6 @@ class PlaybackControlView(discord.ui.View):
                 ephemeral=True,
             )
 
-    @discord.ui.button(label="Add to Queue", emoji="➕", style=discord.ButtonStyle.success, row=2, custom_id="ctrlvee:panel:add-to-queue")
     async def add_to_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
