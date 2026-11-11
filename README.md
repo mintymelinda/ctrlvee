@@ -13,7 +13,7 @@ Current app version: `1.9.17`.
 - Watches folders for new media and enqueues files automatically
 - Enriches now-playing/status messages with TMDB movie/TV metadata
 - Optionally shows recent downloads from one or more Radarr instances
-- Optionally auto-joins a voice channel so the bot stays visibly present
+- Optionally auto-joins a configured voice channel on startup, or follows playback-command users into their current voice channel
 
 ## Requirements
 
@@ -24,7 +24,7 @@ Current app version: `1.9.17`.
 
 ## Docker Deployment
 
-CtrlVee can run in a lightweight container while controlling VLC on another machine. The bot does **not** encode or relay the video stream: VLC on your media server continues to read and play the media. CtrlVee sends playback commands and reads status through VLC's HTTP interface.
+CtrlVee can run in a lightweight container while controlling VLC on another machine. The bot does **not** encode or relay the video stream: VLC on your media server continues to read and play the media. CtrlVee sends playback commands and reads status through VLC's HTTP interface. Joining a Discord voice channel does not share the VLC desktop or create a Go Live stream; screen sharing must be started by a human Discord client.
 
 For a split setup with VLC on a LAN host (for example, `192.168.0.15`) and CtrlVee on a NAS:
 
@@ -159,6 +159,8 @@ Edit `.env` (starting from `template.env`).
 - `ENABLE_VOICE_JOIN`
 - `VOICE_JOIN_CHANNEL_ID`
 - `VOICE_AUTO_JOIN_ON_START`
+- `VOICE_AUTO_JOIN_ON_COMMAND` (default: `false`) — when enabled, a playback command from a user already in a voice channel makes CtrlVee join or move to that user's channel before applying the existing playback permission and ownership checks. The bot requires View Channel and Connect permissions there.
+- `VOICE_AUTO_JOIN_ON_COMMAND` — when enabled, playback commands move the bot into the command author's current voice channel (requires the author to already be in voice)
 - `VOICE_MAX_RECONNECTS`
 - `VOICE_RECONNECT_WINDOW`
 - `VOICE_RECONNECT_COOLDOWN`
