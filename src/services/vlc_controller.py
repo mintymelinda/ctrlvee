@@ -822,11 +822,37 @@ class VLCController:
         return False
     
     def play_item_by_id(self, item_id):
-        """Play a specific playlist item by its ID"""
-        result = self.send_command("pl_play", {"id": str(item_id)})
-        if result is not None:
-            self.logger.debug(f"Play command sent for item {item_id}")
-            return True
+        """Play a specific playlist item and verify VLC selected it.
+
+        VLC can execute a command but return an empty/non-XML HTTP body. The
+        command response alone is therefore not a reliable acknowledgement.
+        """
+        import time
+
+        item_id = str(item_id)
+        playlist = self.get_playlist()
+        if playlist is None:
+            self.logger.warning("Cannot play playlist item %s: VLC playlist is unavailable", item_id)
+            return False
+        if not any(str(item.get("id")) == item_id for item in playlist.findall(".//leaf")):
+            self.logger.warning("Cannot play playlist item %s: item is not in VLC playlist", item_id)
+            return False
+
+        response = self.send_command("pl_play", {"id": item_id})
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            playlist = self.get_playlist()
+            if playlist is not None:
+                current_item, _ = self._current_playlist_item(playlist)
+                if current_item is not None and str(current_item.get("id")) == item_id:
+                    self.logger.debug("VLC confirmed playlist item %s is now selected", item_id)
+                    return True
+            time.sleep(0.1)
+
+        if response is not None:
+            self.logger.warning("VLC acknowledged play for item %s but did not select it", item_id)
+        else:
+            self.logger.warning("VLC did not select item %s after the play command", item_id)
         return False
 
     def set_rate(self, rate: float) -> bool:
