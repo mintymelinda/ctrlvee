@@ -1225,6 +1225,77 @@ class VLCController:
         
         return None
     
+    def play_queued_item_if_monitor_state(
+        self,
+        expected_state: str,
+        expected_current_item_id: Optional[str] = None,
+        require_end: bool = False,
+        end_threshold_seconds: int = 3,
+    ):
+        """Revalidate a monitor observation and start queued playback atomically.
+
+        This method is called through run_async/run_sync, so status, playlist,
+        queue inspection, and the eventual play command share the controller's
+        existing operation lock. A stale monitor observation must never
+        interrupt a newer manual playback selection.
+        """
+        status = self.get_status()
+        if status is None:
+            return {"success": False, "attempted": False, "reason": "status_unavailable"}
+
+        live_state = status.findtext("state")
+        if live_state != expected_state:
+            return {
+                "success": False,
+                "attempted": False,
+                "reason": "state_changed",
+                "state": live_state,
+            }
+
+        live_current_item_id = None
+        if expected_current_item_id is not None:
+            playlist = self.get_playlist()
+            if playlist is None:
+                return {"success": False, "attempted": False, "reason": "playlist_unavailable"}
+            current_item = next(
+                (item for item in playlist.findall(".//leaf") if item.get("current")),
+                None,
+            )
+            live_current_item_id = current_item.get("id") if current_item is not None else None
+            if str(live_current_item_id) != str(expected_current_item_id):
+                return {
+                    "success": False,
+                    "attempted": False,
+                    "reason": "current_item_changed",
+                    "current_item_id": live_current_item_id,
+                }
+
+        if require_end:
+            try:
+                current_time = int(status.findtext("time"))
+                total_length = int(status.findtext("length"))
+            except (TypeError, ValueError):
+                return {"success": False, "attempted": False, "reason": "end_position_unavailable"}
+            if total_length <= 0 or total_length - current_time > end_threshold_seconds:
+                return {
+                    "success": False,
+                    "attempted": False,
+                    "reason": "not_at_end",
+                    "time": current_time,
+                    "length": total_length,
+                }
+
+        next_item = self.get_next_queued_item()
+        if not next_item:
+            return {"success": False, "attempted": False, "reason": "queue_empty"}
+        if expected_current_item_id is not None and str(next_item["item_id"]) == str(expected_current_item_id):
+            return {"success": False, "attempted": False, "reason": "queued_item_already_current"}
+
+        result = self.play_next_queued_item()
+        result["attempted"] = True
+        result["reason"] = "played" if result.get("success") else "play_failed"
+        return result
+
     def play_next_queued_item(self):
         """Play the next item from the soft queue
         

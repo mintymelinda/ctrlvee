@@ -944,7 +944,7 @@ class PlaybackCommands(commands.Cog):
                                         if self._check_queue_auto_play_cooldown():
                                             logger.info(f"Track changed to {current_item_id} but we have queued item {next_queued['item_id']} - interrupting to play queued item")
                                             try:
-                                                play_result = await self.vlc.run_async("play_next_queued_item")
+                                                play_result = await self.vlc.run_async("play_queued_item_if_monitor_state", current_state, expected_current_item_id=current_item_id)
                                                 logger.info(f"Auto-play result: {play_result}")
                                                 
                                                 if play_result.get("success"):
@@ -993,7 +993,7 @@ class PlaybackCommands(commands.Cog):
                                                 logger.debug(f"Could not check time position: {e}")
                                         
                                         if should_auto_play:
-                                            play_result = await self.vlc.run_async("play_next_queued_item")
+                                            play_result = await self.vlc.run_async("play_queued_item_if_monitor_state", current_state, expected_current_item_id=current_item_id, require_end=(current_state == "paused"))
                                             logger.info(f"Auto-play result: {play_result}")
                                             
                                             if play_result.get("success"):
@@ -1158,7 +1158,7 @@ class PlaybackCommands(commands.Cog):
                                 pass
                             if self._check_queue_auto_play_cooldown():
                                 try:
-                                    play_result = await self.vlc.run_async("play_next_queued_item")
+                                    play_result = await self.vlc.run_async("play_queued_item_if_monitor_state", "stopped")
                                     logger.info(f"Auto-play result from stopped state: {play_result}")
                                     if play_result.get("success"):
                                         logger.info(f"Auto-played next queued item: {play_result.get('item_name', 'Unknown')}")
@@ -1189,7 +1189,7 @@ class PlaybackCommands(commands.Cog):
                                 if self._check_queue_auto_play_cooldown():
                                     try:
                                         logger.info(f"Periodic check: Wrong item playing ({current_item_id}), should be queued item ({next_queued['item_id']}) - correcting")
-                                        play_result = await self.vlc.run_async("play_next_queued_item")
+                                        play_result = await self.vlc.run_async("play_queued_item_if_monitor_state", "playing", expected_current_item_id=current_item_id)
                                         
                                         if play_result.get("success"):
                                             logger.info(f"Periodic correction successful: {play_result.get('item_name', 'Unknown')}")
