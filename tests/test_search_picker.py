@@ -47,10 +47,6 @@ class SearchPickerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([number for number, _ in results], [1, 2, 3])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class QueuePickerSearchTests(unittest.TestCase):
     def _items(self):
         return [
@@ -88,3 +84,7 @@ class QueuePickerSearchTests(unittest.TestCase):
             _filter_queue_playlist_items(self._items(), "nonexistent title"),
             [],
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
