@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from src.config import Config
 from src.cogs.playback import PlaybackCommands, _decide_playback_allow
@@ -111,7 +111,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
                 {"success": False, "reason": "status_unavailable", "state": None},
             ])
         )
-        cog._seat_playback_owner = unittest.mock.Mock()
+        cog._seat_playback_owner = Mock()
         cog._announce_now_playing = AsyncMock()
         ctx = SimpleNamespace(
             author=SimpleNamespace(id=7),
