@@ -235,27 +235,19 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(second["queue_id"], "queue-entry-a")
         self.assertEqual(len(self.controller._queued_items), 1)
 
-    def test_removing_one_repeated_media_entry_only_deletes_its_playlist_leaf(self):
+    def test_removing_one_repeated_media_queue_entry_does_not_delete_playlist_media(self):
         self.controller._queued_items = {
-            "queue-a": {"queue_id": "queue-a", "playlist_item_id": "vlc-42", "item_id": "vlc-42", "media_uri": "file:///media/repeated.mkv", "item_name": "Repeated", "queue_order": 1},
-            "queue-b": {"queue_id": "queue-b", "playlist_item_id": "vlc-43", "item_id": "vlc-43", "media_uri": "file:///media/repeated.mkv", "item_name": "Repeated", "queue_order": 2},
+            "queue-a": {"queue_id": "queue-a", "playlist_item_id": "vlc-42", "item_id": "vlc-42",
+                        "media_uri": "file:///media/repeated.mkv", "item_name": "Repeated", "queue_order": 1},
+            "queue-b": {"queue_id": "queue-b", "playlist_item_id": "vlc-43", "item_id": "vlc-43",
+                        "media_uri": "file:///media/repeated.mkv", "item_name": "Repeated", "queue_order": 2},
         }
-        before = ET.fromstring(
-            '<playlist><leaf id="vlc-42" name="Repeated" uri="file:///media/repeated.mkv"/>'
-            '<leaf id="vlc-43" name="Repeated" uri="file:///media/repeated.mkv"/></playlist>'
-        )
-        after = ET.fromstring(
-            '<playlist><leaf id="vlc-43" name="Repeated" uri="file:///media/repeated.mkv"/></playlist>'
-        )
-        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
-            self.controller, "delete_playlist_item", return_value=True
-        ) as delete:
+        with patch.object(self.controller, "delete_playlist_item") as delete:
             result = self.controller.remove_from_queue_by_id("queue-a")
-
         self.assertTrue(result["success"])
         self.assertEqual(result["queue_id"], "queue-a")
         self.assertEqual(result["removed_item_id"], "vlc-42")
-        delete.assert_called_once_with("vlc-42")
+        delete.assert_not_called()
         self.assertNotIn("queue-a", self.controller._queued_items)
         self.assertIn("queue-b", self.controller._queued_items)
 
@@ -667,42 +659,24 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(self.controller._queued_items, {})
         self.assertEqual(self.controller._shuffle_restore_queue, [])
 
-    def test_remove_preserves_current_playlist_item(self):
-        self.controller._queued_items = {
-            "current": {"item_name": "Current", "queue_order": 1}
-        }
-        playlist = ET.fromstring(
-            '<playlist><leaf id="current" name="Current" current="current"/></playlist>'
-        )
-        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
-            self.controller, "delete_playlist_item"
-        ) as delete:
+    def test_remove_from_queue_is_independent_of_current_vlc_item(self):
+        self.controller._queued_items = {"current": {"item_name": "Current", "queue_order": 1}}
+        with patch.object(self.controller, "delete_playlist_item") as delete:
             result = self.controller.remove_from_queue_by_id("current")
-
         self.assertTrue(result["success"])
-        self.assertEqual(result["preserved_item_ids"], ["current"])
-        delete.assert_not_called()
         self.assertNotIn("current", self.controller._queued_items)
-
-    def test_remove_preserves_scheduled_media_by_uri(self):
-        self.controller._queued_items = {
-            "scheduled": {"item_name": "Scheduled", "queue_order": 1}
-        }
-        playlist = ET.fromstring(
-            '<playlist><leaf id="scheduled" name="Scheduled" uri="file:///media/scheduled.mkv"/></playlist>'
-        )
-        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
-            self.controller, "delete_playlist_item"
-        ) as delete:
-            result = self.controller.remove_from_queue_by_id(
-                "scheduled",
-                protected_uris={"file:///media/scheduled.mkv"},
-            )
-
-        self.assertTrue(result["success"])
-        self.assertEqual(result["preserved_item_ids"], ["scheduled"])
+        self.assertEqual(result["preserved_item_ids"], [])
         delete.assert_not_called()
+
+    def test_remove_from_queue_is_independent_of_scheduled_media_protection(self):
+        self.controller._queued_items = {"scheduled": {"item_name": "Scheduled", "queue_order": 1}}
+        with patch.object(self.controller, "delete_playlist_item") as delete:
+            result = self.controller.remove_from_queue_by_id(
+                "scheduled", protected_uris={"file:///media/scheduled.mkv"}
+            )
+        self.assertTrue(result["success"])
         self.assertNotIn("scheduled", self.controller._queued_items)
+        delete.assert_not_called()
 
     def test_remove_from_queue_does_not_depend_on_vlc_availability(self):
         self.controller._queued_items = {"queued": {"item_name": "Queued", "queue_order": 1}}
