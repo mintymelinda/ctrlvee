@@ -380,6 +380,13 @@ async def _resolve_voice_channel() -> discord.VoiceChannel | None:
         # instead of pulling the bot back to the configured startup room.
         active_channel = voice_channel_service.get_any_target_channel()
         if active_channel is not None:
+            active_permissions = active_channel.permissions_for(active_channel.guild.me)
+            if not active_permissions.view_channel or not active_permissions.connect:
+                logger.warning(
+                    "Missing VIEW_CHANNEL or CONNECT permission in active voice channel '%s'",
+                    active_channel.name,
+                )
+                return None
             return active_channel
 
         channel_id = getattr(Config, 'VOICE_JOIN_CHANNEL_ID', 0)
