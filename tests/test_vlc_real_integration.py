@@ -240,33 +240,43 @@ class RealVLCIntegrationTests(unittest.TestCase):
         second = self.controller.queue_item_next(third_id)
         self.assertTrue(first["success"], first)
         self.assertTrue(second["success"], second)
+        self.assertNotEqual(first["queue_id"], second_id)
+        self.assertNotEqual(second["queue_id"], third_id)
 
         snapshot = self.controller.get_queue_status()
         ordered = sorted(
             snapshot["queued_items"].items(),
             key=lambda entry: entry[1]["queue_order"],
         )
-        self.assertEqual([item_id for item_id, _ in ordered], [second_id, third_id])
+        self.assertEqual(
+            [queue_id for queue_id, _ in ordered],
+            [first["queue_id"], second["queue_id"]],
+        )
         self.assertEqual([info["queue_order"] for _, info in ordered], [1, 2])
 
-        removed = self.controller.remove_from_queue_by_id(second_id)
+        removed = self.controller.remove_from_queue_by_id(first["queue_id"])
         self.assertTrue(removed["success"], removed)
         remaining = self.controller.get_queue_status()["queued_items"]
-        self.assertEqual(list(remaining), [third_id])
-        self.assertEqual(remaining[third_id]["queue_order"], 1)
+        self.assertEqual(list(remaining), [second["queue_id"]])
+        self.assertEqual(remaining[second["queue_id"]]["queue_order"], 1)
 
         queued_play = self.controller.play_next_queued_item()
         self.assertTrue(queued_play["success"], queued_play)
         self.wait_for_current_item(third_id)
         self.assertEqual(queued_play["item_id"], third_id)
+        self.assertEqual(queued_play["queue_id"], second["queue_id"])
 
     def test_real_vlc_soft_queue_survives_controller_restart_and_prunes_missing_items(self):
         first_id, second_id, third_id = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
         self.wait_for_current_item(first_id)
 
-        self.assertTrue(self.controller.queue_item_next(second_id)["success"])
-        self.assertTrue(self.controller.queue_item_next(third_id)["success"])
+        first_queued = self.controller.queue_item_next(second_id)
+        second_queued = self.controller.queue_item_next(third_id)
+        self.assertTrue(first_queued["success"], first_queued)
+        self.assertTrue(second_queued["success"], second_queued)
+        first_queue_id = first_queued["queue_id"]
+        second_queue_id = second_queued["queue_id"]
 
         # Recreate the controller as if the bot process had restarted while VLC
         # continued running. The persisted soft queue must retain its order.
@@ -278,7 +288,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         restored = restarted.reconcile_queue_with_playlist()
         self.assertTrue(restored["success"], restored)
-        self.assertEqual(restored["queued_item_ids"], [second_id, third_id])
+        self.assertEqual(restored["queued_item_ids"], [first_queue_id, second_queue_id])
 
         # Remove the first queued media entry from VLC while the bot is offline.
         restarted.send_command("pl_delete", {"id": second_id})
@@ -292,9 +302,9 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         reconciled = restarted.reconcile_queue_with_playlist()
         self.assertTrue(reconciled["success"], reconciled)
-        self.assertEqual(reconciled["removed_item_ids"], [second_id])
-        self.assertEqual(reconciled["queued_item_ids"], [third_id])
-        self.assertEqual(restarted._queued_items[third_id]["queue_order"], 1)
+        self.assertEqual(reconciled["removed_queue_ids"], [first_queue_id])
+        self.assertEqual(reconciled["queued_item_ids"], [second_queue_id])
+        self.assertEqual(restarted._queued_items[second_queue_id]["queue_order"], 1)
 
         # A second controller restart must read the pruned, compacted backup.
         final_controller = VLCController(
@@ -305,7 +315,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         final_result = final_controller.reconcile_queue_with_playlist()
         self.assertTrue(final_result["success"], final_result)
-        self.assertEqual(final_result["queued_item_ids"], [third_id])
+        self.assertEqual(final_result["queued_item_ids"], [second_queue_id])
 
     def test_real_vlc_playback_recovers_after_stop(self):
         first_id, second_id, _ = self.load_playlist()
