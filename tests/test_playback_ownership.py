@@ -241,26 +241,90 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.defer.assert_not_awaited()
         cog.vlc.run_async.assert_not_awaited()
 
-    def test_queue_picker_preserves_playlist_positions_across_pages(self):
+    def test_queue_picker_preserves_stable_ids_and_playlist_positions_across_pages(self):
         playlist = [
-            ET.Element("leaf", {"name": f"Track {position}"})
+            ET.Element("leaf", {"id": str(position * 10), "name": f"Track {position}"})
             for position in range(1, 31)
         ]
         picker_view = QueuePlaylistView(PlaybackControlView(Mock()), playlist)
-        picker = next(
-            child for child in picker_view.children
-            if isinstance(child, QueuePlaylistSelect)
-        )
+        picker = next(child for child in picker_view.children if isinstance(child, QueuePlaylistSelect))
 
         self.assertEqual(len(picker.options), 25)
         self.assertEqual(picker.options[0].label, "Track 1")
-        self.assertEqual(picker.options[0].value, "1")
+        self.assertEqual(picker.options[0].value, "10")
+        self.assertEqual(picker.options[0].description, "Playlist item #1")
         self.assertEqual(picker.options[-1].label, "Track 25")
-        self.assertEqual(picker.options[-1].value, "25")
+        self.assertEqual(picker.options[-1].value, "250")
 
         picker_view.page = 1
         next_page = QueuePlaylistSelect(picker_view)
-        self.assertEqual([option.value for option in next_page.options], ["26", "27", "28", "29", "30"])
+        self.assertEqual([option.value for option in next_page.options], ["260", "270", "280", "290", "300"])
+        self.assertEqual(next_page.options[0].description, "Playlist item #26")
+
+    def test_queue_picker_omits_playlist_entries_without_stable_ids(self):
+        playlist = [
+            ET.Element("leaf", {"id": "stable", "name": "Stable"}),
+            ET.Element("leaf", {"name": "No ID"}),
+            ET.Element("leaf", {"id": "later", "name": "Later"}),
+        ]
+        view = QueuePlaylistView(PlaybackControlView(Mock()), playlist)
+        picker = next(child for child in view.children if isinstance(child, QueuePlaylistSelect))
+
+        self.assertEqual([option.value for option in picker.options], ["stable", "later"])
+        self.assertEqual([option.description for option in picker.options], [
+            "Playlist item #1",
+            "Playlist item #3",
+        ])
+
+    async def test_queue_by_stable_id_checks_voice_guard_and_uses_serialized_controller(self):
+        cog = SimpleNamespace(
+            _playback_guard=AsyncMock(return_value=(True, "")),
+            vlc=SimpleNamespace(run_async=AsyncMock(return_value={
+                "success": True, "item_name": "Selected", "queue_order": 2,
+            })),
+        )
+        context = SimpleNamespace(author=Mock(), send=AsyncMock())
+
+        await PlaybackCommands.queue_playlist_item_by_id(cog, context, "vlc-42")
+
+        cog._playback_guard.assert_awaited_once_with(context.author)
+        cog.vlc.run_async.assert_awaited_once_with("queue_playlist_item_by_id", "vlc-42")
+        context.send.assert_awaited_once_with("Queued **Selected** as queue item **#2**.")
+
+    async def test_queue_by_stable_id_reports_removed_playlist_item(self):
+        cog = SimpleNamespace(
+            _playback_guard=AsyncMock(return_value=(True, "")),
+            vlc=SimpleNamespace(run_async=AsyncMock(return_value={
+                "success": False, "error": "item_not_found",
+            })),
+        )
+        context = SimpleNamespace(author=Mock(), send=AsyncMock())
+
+        await PlaybackCommands.queue_playlist_item_by_id(cog, context, "removed")
+
+        context.send.assert_awaited_once_with(
+            "That playlist item is no longer available. Reopen Add to Queue and choose it again.",
+        )
+
+    async def test_queue_picker_dispatches_stable_item_id(self):
+        view = PlaybackControlView(Mock())
+        view._dispatch = AsyncMock()
+        picker_view = QueuePlaylistView(view, [ET.Element("leaf", {"id": "vlc-42", "name": "Selected"})])
+        picker = next(child for child in picker_view.children if isinstance(child, QueuePlaylistSelect))
+        picker._values = ["vlc-42"]
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(roles=[SimpleNamespace(id=1, name="DJ")]),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+
+        with patch.object(Config, "ALLOWED_ROLES", ["DJ"]):
+            await picker.callback(interaction)
+
+        view._dispatch.assert_awaited_once_with(
+            interaction,
+            "queue_playlist_item_by_id",
+            "vlc-42",
+        )
 
     async def test_playback_panel_embed_summarizes_soft_queue_and_shuffle(self):
         cog = PlaybackCommands.__new__(PlaybackCommands)
@@ -602,7 +666,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
     def test_playlist_picker_pages_every_playlist_item(self):
         playlist_items = [
-            {"name": f"Video {index}"}
+            {"id": str(index), "name": f"Video {index}"}
             for index in range(1, 61)
         ]
         view = QueuePlaylistView(PlaybackControlView(Mock()), playlist_items)
@@ -637,7 +701,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([option.value for option in select.options], [str(i) for i in range(51, 61)])
 
     async def test_picker_page_navigation_keeps_navigation_controls(self):
-        playlist_items = [{"name": f"Video {index}"} for index in range(1, 31)]
+        playlist_items = [{"id": str(index), "name": f"Video {index}"} for index in range(1, 31)]
         view = QueuePlaylistView(PlaybackControlView(Mock()), playlist_items)
         interaction = SimpleNamespace(
             response=SimpleNamespace(edit_message=AsyncMock())

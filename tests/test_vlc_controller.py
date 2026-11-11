@@ -194,6 +194,33 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["playlist_position"], 2)
         queue.assert_called_once_with("2")
 
+    def test_queue_playlist_item_by_id_queues_the_exact_live_item(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first" name="First"/><leaf id="selected" name="Selected"/></playlist>'
+        )
+        queued = {"success": True, "queue_order": 2, "total_queued": 2}
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "queue_item_next", return_value=queued
+        ) as queue:
+            result = self.controller.queue_playlist_item_by_id("selected")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["item_id"], "selected")
+        self.assertEqual(result["item_name"], "Selected")
+        self.assertEqual(result["playlist_position"], 2)
+        queue.assert_called_once_with("selected")
+
+    def test_queue_playlist_item_by_id_rejects_stale_selection(self):
+        playlist = ET.fromstring('<playlist><leaf id="replacement" name="Replacement"/></playlist>')
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "queue_item_next"
+        ) as queue:
+            result = self.controller.queue_playlist_item_by_id("removed")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "item_not_found")
+        queue.assert_not_called()
+
     def test_play_next_or_advance_prefers_queued_item(self):
         queued = {"success": True, "item_name": "Queued"}
         with patch.object(self.controller, "get_next_queued_item", return_value={"item_id": "1"}), patch.object(

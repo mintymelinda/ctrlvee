@@ -226,6 +226,27 @@ class VLCController:
         result["playlist_position"] = position
         return result
 
+    def queue_playlist_item_by_id(self, item_id: str):
+        """Validate a stable playlist item ID and add that exact item to the soft queue."""
+        playlist = self.get_playlist()
+        if playlist is None:
+            return {"success": False, "error": "playlist_unavailable"}
+        items = playlist.findall(".//leaf")
+        if not items:
+            return {"success": False, "error": "playlist_empty"}
+
+        target_id = str(item_id)
+        for position, item in enumerate(items, start=1):
+            if str(item.get("id")) != target_id:
+                continue
+            result = self.queue_item_next(target_id)
+            result["item_id"] = target_id
+            result["item_name"] = item.get("name", "Unknown")
+            result["playlist_position"] = position
+            return result
+
+        return {"success": False, "error": "item_not_found"}
+
     def _current_playlist_item(self, playlist):
         """Return the current leaf and its one-based playlist position."""
         if playlist is None:
