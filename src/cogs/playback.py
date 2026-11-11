@@ -3202,7 +3202,11 @@ class QueuePlaylistView(discord.ui.View):
 
     async def _change_page(self, interaction, offset):
         self.page = min(max(0, self.page + offset), self.page_count - 1)
-        self.clear_items()
+        current_select = next(
+            child for child in self.children
+            if isinstance(child, QueuePlaylistSelect)
+        )
+        self.remove_item(current_select)
         self.add_item(QueuePlaylistSelect(self))
         self.previous_button.disabled = self.page == 0
         self.next_button.disabled = self.page >= self.page_count - 1
@@ -3301,7 +3305,11 @@ class QueueManageView(discord.ui.View):
     async def _change_page(self, interaction, offset):
         self.page = min(max(0, self.page + offset), self.page_count - 1)
         self.selected_queue_item_id = None
-        self.clear_items()
+        current_select = next(
+            child for child in self.children
+            if isinstance(child, QueueManageSelect)
+        )
+        self.remove_item(current_select)
         self.add_item(QueueManageSelect(self))
         self.previous_button.disabled = self.page == 0
         self.next_button.disabled = self.page >= self.page_count - 1
