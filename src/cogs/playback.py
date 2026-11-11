@@ -2781,6 +2781,31 @@ class PlaybackCommands(commands.Cog):
             logger.error(f"Error in queue_next command: {e}")
             await ctx.send(f'Error queuing item: {str(e)}')
 
+    async def queue_playlist_item_by_id(self, ctx, item_id: str):
+        """Queue the exact playlist item selected by the interactive picker."""
+        allowed, reason = await self._playback_guard(ctx.author)
+        if not allowed:
+            await ctx.send(reason)
+            return
+
+        result = await self.vlc.run_async("queue_playlist_item_by_id", item_id)
+        if not result.get("success"):
+            if result.get("error") == "item_not_found":
+                message = "That playlist item is no longer available. Reopen Add to Queue and choose it again."
+            elif result.get("error") == "playlist_unavailable":
+                message = "Could not access the VLC playlist. Please try again."
+            elif result.get("error") == "playlist_empty":
+                message = "The VLC playlist is empty."
+            else:
+                message = f"Could not queue that item: {result.get('error', 'Unknown error')}"
+            await ctx.send(message)
+            return
+
+        await ctx.send(
+            f"Queued **{result.get('item_name', 'Unknown')}** as queue "
+            f"item **#{result.get('queue_order', '?')}**."
+        )
+
     @commands.command(name='queue_status', aliases=['qstatus'])
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def queue_status(self, ctx):
@@ -3158,10 +3183,10 @@ class QueuePlaylistSelect(discord.ui.Select):
         options = [
             discord.SelectOption(
                 label=(item.get("name") or "Unknown")[:100],
-                value=str(position),
+                value=str(item.get("id")),
                 description=f"Playlist item #{position}",
             )
-            for position, item in enumerate(page_items, start + 1)
+            for position, item in page_items
         ]
         super().__init__(
             placeholder=f"Choose a playlist item (page {picker_view.page + 1}/{picker_view.page_count})",
@@ -3179,8 +3204,8 @@ class QueuePlaylistSelect(discord.ui.Select):
             return
         await self.picker_view.playback_view._dispatch(
             interaction,
-            "queue_next",
-            int(self.values[0]),
+            "queue_playlist_item_by_id",
+            self.values[0],
         )
 
 
@@ -3192,7 +3217,11 @@ class QueuePlaylistView(discord.ui.View):
     def __init__(self, playback_view, playlist_items, page=0):
         super().__init__(timeout=120)
         self.playback_view = playback_view
-        self.playlist_items = list(playlist_items)
+        self.playlist_items = [
+            (position, item)
+            for position, item in enumerate(playlist_items, 1)
+            if item.get("id")
+        ]
         self.page_count = max(1, (len(self.playlist_items) + self.page_size - 1) // self.page_size)
         self.page = min(max(0, page), self.page_count - 1)
         self.add_item(QueuePlaylistSelect(self))
@@ -3576,7 +3605,11 @@ class PlaybackControlView(discord.ui.View):
 
         command = getattr(self.cog, command_name)
         try:
-            await command.callback(self.cog, InteractionContext(interaction), *args)
+            callback = getattr(command, "callback", None)
+            if callback is not None:
+                await callback(self.cog, InteractionContext(interaction), *args)
+            else:
+                await command(InteractionContext(interaction), *args)
         except Exception:
             self.cog.logger.exception("Playback panel action failed: %s", command_name)
             await interaction.followup.send(
