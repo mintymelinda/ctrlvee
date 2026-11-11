@@ -3126,6 +3126,24 @@ class QueueManageView(discord.ui.View):
         self.move_earlier_button.disabled = True
         self.move_later_button.disabled = True
 
+    @discord.ui.button(
+        label="Clear Queue",
+        emoji="🧹",
+        style=discord.ButtonStyle.danger,
+        row=2,
+    )
+    async def clear_queue_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.send_message(
+            "Clear all soft-queue tracking and shuffle-restoration entries? "
+            "Items already in the VLC playlist will remain in place.",
+            view=QueueClearConfirmView(self.cog),
+            ephemeral=True,
+        )
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
             await interaction.response.send_message(
@@ -3235,6 +3253,75 @@ class QueueManageView(discord.ui.View):
         button: discord.ui.Button,
     ):
         await self._apply_queue_change(interaction, "down")
+
+
+class QueueClearConfirmView(discord.ui.View):
+    """Explicit confirmation for clearing soft-queue tracking."""
+
+    def __init__(self, cog: PlaybackCommands):
+        super().__init__(timeout=30)
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def confirm_clear(self, interaction: discord.Interaction):
+        allowed, reason = await self.cog._playback_guard(
+            interaction.user,
+            presence_only=True,
+        )
+        if not allowed:
+            await interaction.response.send_message(reason, ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.cog.vlc.run_async("clear_queue_tracking")
+            await interaction.edit_original_response(
+                content=(
+                    "The soft queue and shuffle-restoration tracking have been cleared. "
+                    "Items already in the VLC playlist remain in place."
+                ),
+                view=None,
+            )
+        except Exception:
+            self.cog.logger.exception("Could not clear the soft queue from the playback panel")
+            await interaction.edit_original_response(
+                content="The soft queue could not be cleared. Please try again.",
+                view=None,
+            )
+
+    @discord.ui.button(
+        label="Confirm Clear",
+        emoji="🗑️",
+        style=discord.ButtonStyle.danger,
+    )
+    async def confirm_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self.confirm_clear(interaction)
+
+    @discord.ui.button(
+        label="Cancel",
+        style=discord.ButtonStyle.secondary,
+    )
+    async def cancel_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.edit_message(
+            content="Queue clear cancelled.",
+            view=None,
+        )
 
 
 class PlaybackControlView(discord.ui.View):

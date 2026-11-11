@@ -7,6 +7,7 @@ from src.config import Config
 from src.cogs.playback import (
     PlaybackCommands,
     PlaybackControlView,
+    QueueClearConfirmView,
     QueuePlaylistSelect,
     QueueManageView,
     _decide_playback_allow,
@@ -38,6 +39,82 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     def test_playback_panel_exposes_manage_queue_button(self):
         view = PlaybackControlView(Mock())
         self.assertIn("Manage Queue", {button.label for button in view.children})
+
+    def test_queue_manager_exposes_clear_queue_confirmation_action(self):
+        queue_status = {"queued_items": {"track": {"queue_order": 1, "item_name": "Track"}}}
+        view = QueueManageView(
+            Mock(),
+            queue_status,
+            ET.fromstring('<playlist><leaf id="track" name="Track"/></playlist>'),
+        )
+        self.assertIn("Clear Queue", {child.label for child in view.children if hasattr(child, "label")})
+
+        confirm_view = QueueClearConfirmView(Mock())
+        self.assertEqual(
+            {child.label for child in confirm_view.children},
+            {"Confirm Clear", "Cancel"},
+        )
+
+    async def test_clear_queue_confirmation_rechecks_playback_role(self):
+        view = QueueClearConfirmView(Mock())
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(roles=[]),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        with patch.object(Config, "ALLOWED_ROLES", ["DJ"]):
+            allowed = await view.interaction_check(interaction)
+        self.assertFalse(allowed)
+        interaction.response.send_message.assert_awaited_once_with(
+            "You don't have a role permitted to control playback.",
+            ephemeral=True,
+        )
+
+    async def test_confirm_clear_queue_checks_voice_room_before_mutating(self):
+        cog = Mock()
+        cog._playback_guard = AsyncMock(return_value=(False, "Join the listening room"))
+        cog.vlc = SimpleNamespace(run_async=AsyncMock())
+        view = QueueClearConfirmView(cog)
+        interaction = SimpleNamespace(
+            user=Mock(),
+            response=SimpleNamespace(
+                send_message=AsyncMock(),
+                defer=AsyncMock(),
+            ),
+            edit_original_response=AsyncMock(),
+        )
+
+        await view.confirm_clear(interaction)
+
+        cog._playback_guard.assert_awaited_once_with(
+            interaction.user,
+            presence_only=True,
+        )
+        interaction.response.send_message.assert_awaited_once_with(
+            "Join the listening room",
+            ephemeral=True,
+        )
+        interaction.response.defer.assert_not_awaited()
+        cog.vlc.run_async.assert_not_awaited()
+
+    async def test_confirm_clear_queue_uses_serialized_tracking_clear(self):
+        cog = Mock()
+        cog._playback_guard = AsyncMock(return_value=(True, ""))
+        cog.vlc = SimpleNamespace(run_async=AsyncMock())
+        cog.logger = Mock()
+        view = QueueClearConfirmView(cog)
+        interaction = SimpleNamespace(
+            user=Mock(),
+            response=SimpleNamespace(defer=AsyncMock()),
+            edit_original_response=AsyncMock(),
+        )
+
+        await view.confirm_clear(interaction)
+
+        cog.vlc.run_async.assert_awaited_once_with("clear_queue_tracking")
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        interaction.edit_original_response.assert_awaited_once()
+        self.assertIn("have been cleared", interaction.edit_original_response.await_args.kwargs["content"])
+        self.assertIsNone(interaction.edit_original_response.await_args.kwargs["view"])
 
     def test_queue_manager_preserves_queue_order_and_exposes_mutations(self):
         queue_status = {
