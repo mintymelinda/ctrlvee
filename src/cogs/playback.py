@@ -898,7 +898,7 @@ class PlaybackCommands(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
-                status = self.vlc.get_status()
+                status, playlist = await self.vlc.run_async("get_playback_snapshot")
                 if status:
                     current_state = status.find('state').text
                     # If VLC is stopped, clear the bot's presence (throttled)
@@ -921,7 +921,6 @@ class PlaybackCommands(commands.Cog):
                         pass
                     
                     # Get current position and item from playlist
-                    playlist = self.vlc.get_playlist()
                     current_position = None
                     current_item = None
                     if playlist is not None:
@@ -946,7 +945,7 @@ class PlaybackCommands(commands.Cog):
                                         if self._check_queue_auto_play_cooldown():
                                             logger.info(f"Track changed to {current_item_id} but we have queued item {next_queued['item_id']} - interrupting to play queued item")
                                             try:
-                                                play_result = self.vlc.play_next_queued_item()
+                                                play_result = await self.vlc.run_async("play_next_queued_item")
                                                 logger.info(f"Auto-play result: {play_result}")
                                                 
                                                 if play_result.get("success"):
@@ -1026,7 +1025,7 @@ class PlaybackCommands(commands.Cog):
                             if position_changed and current_item_id:
                                 try:
                                     # Check for queue transitions and shuffle restoration
-                                    queue_result = self.vlc.check_and_handle_queue_transition(current_item_id)
+                                    queue_result = await self.vlc.run_async("check_and_handle_queue_transition", current_item_id)
                                     
                                     # Log any queue transitions
                                     if queue_result.get("transitions"):
@@ -1056,7 +1055,7 @@ class PlaybackCommands(commands.Cog):
                                         self.vlc._handle_queued_item_finished(last_item_id)
                                         # Ensure playback rate is reset to normal after an item finishes
                                         try:
-                                            self.vlc.set_rate(1.0)
+                                            await self.vlc.run_async("set_rate", 1.0)
                                             logger.debug("Playback rate reset to 1.0 after item finished")
                                         except Exception as e:
                                             logger.debug(f"Failed to reset playback rate after finish: {e}")

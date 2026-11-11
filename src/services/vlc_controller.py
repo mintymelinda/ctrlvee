@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+import asyncio
 import os
 import json
 import xml.etree.ElementTree as ET
@@ -34,6 +35,7 @@ class VLCController:
         self.queue_backup_file = queue_backup_file
         self.logger = logging.getLogger(__name__)
         self.bot = bot
+        self._async_operation_lock = asyncio.Lock()
         
         # Queue management state
         self._queued_items = {}  # item_id -> queue_info
@@ -85,6 +87,30 @@ class VLCController:
             self.logger.debug("Queue backup saved successfully")
         except Exception as e:
             self.logger.error(f"Error saving queue backup: {e}")
+
+    async def run_async(self, method_name: str, *args, **kwargs):
+        """Run a complete synchronous controller operation off-loop, serialized."""
+        method = getattr(self, method_name, None)
+        if not callable(method) or method_name.startswith("_"):
+            raise ValueError(f"Unsupported VLC controller operation: {method_name}")
+        async with self._async_operation_lock:
+            return await asyncio.to_thread(method, *args, **kwargs)
+
+    def get_playback_snapshot(self):
+        """Read status and playlist as one serialized observation."""
+        return self.get_status(), self.get_playlist()
+
+    def play_item_and_confirm(self, item_id):
+        """Issue a play command and confirm the resulting current item atomically."""
+        result = self.play_item(item_id)
+        if result is None or result is False:
+            return result, False
+        playlist = self.get_playlist()
+        current = next(
+            (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
+            None,
+        ) if playlist is not None else None
+        return result, bool(current is not None and str(current.get("id")) == str(item_id))
 
     def send_command(self, command: str, params: Optional[Dict[str, str]] = None) -> Optional[ET.Element]:
         """Send command to VLC HTTP interface

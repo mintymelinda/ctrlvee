@@ -108,54 +108,55 @@ class Scheduler(commands.Cog):
         path = self.vlc._uri_to_path(uri)
         return bool(path) and self.vlc._file_exists_robust(path)
 
-    def _rebind_due_schedules(self, now) -> dict:
-        """Resolve schedules due within ten minutes and persist updated indexes."""
+    async def _rebind_due_schedules(self, now, schedules=None) -> dict:
+        """Resolve due schedules using a serialized VLC read outside the list lock."""
+        schedules = list(self.scheduled if schedules is None else schedules)
         due = [
-            s for s in self.scheduled
-            if s.get("status") != "announcing"
-            and (s["dt"] - now).total_seconds() <= 600
+            schedule for schedule in schedules
+            if schedule.get("status") != "announcing"
+            and (schedule["dt"] - now).total_seconds() <= 600
         ]
         if not due:
             return {}
 
-        playlist = self.vlc.get_playlist()
+        playlist = await self.vlc.run_async("get_playlist")
         items = playlist.findall(".//leaf") if playlist is not None else []
         resolved = {}
-        changed = False
-        previous_states = {}
-        changed_schedules = set()
-        for schedule in due:
-            index = _resolve_schedule_index(schedule, items, self._uri_exists)
-            resolved[id(schedule)] = (index, items[index] if index is not None else None)
-            if index is None:
-                continue
-            leaf = items[index]
-            if schedule["number"] != index + 1 or (
-                schedule.get("uri") and schedule["uri"] != leaf.get("uri")
-            ):
-                logger.info(
-                    "Rebinding schedule '%s' #%s -> #%s (%s)",
-                    schedule.get("title"), schedule["number"], index + 1, leaf.get("name"),
-                )
-                previous_states[id(schedule)] = (schedule, schedule.copy())
-                changed_schedules.add(id(schedule))
-                schedule["number"] = index + 1
-                schedule["uri"] = leaf.get("uri") or schedule.get("uri")
-                changed = True
+        async with self._schedule_lock:
+            changed = False
+            previous_states = {}
+            changed_schedules = set()
+            for schedule in due:
+                if not any(entry is schedule for entry in self.scheduled):
+                    continue
+                index = await asyncio.to_thread(_resolve_schedule_index, schedule, items, self._uri_exists)
+                resolved[id(schedule)] = (index, items[index] if index is not None else None)
+                if index is None:
+                    continue
+                leaf = items[index]
+                if schedule["number"] != index + 1 or (
+                    schedule.get("uri") and schedule["uri"] != leaf.get("uri")
+                ):
+                    logger.info(
+                        "Rebinding schedule '%s' #%s -> #%s (%s)",
+                        schedule.get("title"), schedule["number"], index + 1, leaf.get("name"),
+                    )
+                    previous_states[id(schedule)] = (schedule, schedule.copy())
+                    changed_schedules.add(id(schedule))
+                    schedule["number"] = index + 1
+                    schedule["uri"] = leaf.get("uri") or schedule.get("uri")
+                    changed = True
 
-        if changed and not self._save_schedule_backup():
-            # Do not execute using a rebind that was not durably recorded.
-            # Restore every changed entry and defer those entries until the
-            # next scheduler pass can persist the updated playlist identity.
-            for schedule, previous in previous_states.values():
-                schedule.clear()
-                schedule.update(previous)
-            for schedule_id in changed_schedules:
-                resolved.pop(schedule_id, None)
-            logger.error(
-                "Could not persist scheduled playlist rebindings; restored "
-                "their previous state and deferred execution"
-            )
+            if changed and not self._save_schedule_backup():
+                for schedule, previous in previous_states.values():
+                    schedule.clear()
+                    schedule.update(previous)
+                for schedule_id in changed_schedules:
+                    resolved.pop(schedule_id, None)
+                logger.error(
+                    "Could not persist scheduled playlist rebindings; restored "
+                    "their previous state and deferred execution"
+                )
         return resolved
 
     def _load_schedule_backup(self):
@@ -290,7 +291,7 @@ class Scheduler(commands.Cog):
                 await ctx.send("❌ Scheduled time must be in the future (PH time).")
                 return
             # Get movie title and duration from playlist (on demand)
-            playlist = self.vlc.get_playlist()
+            playlist = await self.vlc.run_async("get_playlist")
             items = playlist.findall('.//leaf') if playlist is not None else []
             idx = number - 1
             if not (0 <= idx < len(items)):
@@ -456,137 +457,104 @@ class Scheduler(commands.Cog):
         )
         return True
 
-    def _execute_due_schedule(self, schedule, leaf, now):
-        """Execute one due schedule with a durable claim and restart reconciliation."""
-        if schedule.get("status") == "announcing":
-            return "announcing"
-
-        item_id = leaf.get("id") if leaf is not None else None
-
-        # If a previous process died after sending the command, reconcile against
-        # VLC's current item before deciding whether another command is needed.
-        if schedule.get("status") == "executing":
-            claimed_item_id = schedule.get("target_item_id")
-            if (
-                item_id is not None
-                and claimed_item_id is not None
-                and str(item_id) == str(claimed_item_id)
-                and leaf.get("current") is not None
-            ):
-                schedule["status"] = "announcing"
-                schedule.setdefault("started_announcement_sent_channels", [])
-                schedule.setdefault("started_metadata_sent_channels", [])
-                if not self._save_schedule_backup():
-                    schedule["status"] = "executing"
-                    return "confirming"
-                logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))
+    async def _execute_due_schedule(self, schedule, leaf, now):
+        """Execute one due job without holding the list lock over VLC I/O."""
+        async with self._schedule_lock:
+            if schedule.get("status") == "announcing":
                 return "announcing"
+            item_id = leaf.get("id") if leaf is not None else None
 
-            # VLC's HTTP command response does not confirm that pl_play actually
-            # changed the current item. Allow a short transition window before
-            # retrying an in-flight command, including when playlist reads fail.
-            started_at = schedule.get("execution_started_at")
-            if started_at:
-                if isinstance(started_at, str):
-                    started_at = datetime.fromisoformat(started_at)
-                elapsed = (now - started_at).total_seconds()
-                if elapsed < 90:
-                    return "confirming"
+            if schedule.get("status") == "executing":
+                claimed_item_id = schedule.get("target_item_id")
+                if (
+                    item_id is not None and claimed_item_id is not None
+                    and str(item_id) == str(claimed_item_id)
+                    and leaf.get("current") is not None
+                ):
+                    previous = schedule.copy()
+                    schedule["status"] = "announcing"
+                    schedule.setdefault("started_announcement_sent_channels", [])
+                    schedule.setdefault("started_metadata_sent_channels", [])
+                    if not self._save_schedule_backup():
+                        schedule.clear()
+                        schedule.update(previous)
+                        return "confirming"
+                    logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))
+                    return "announcing"
 
-                previous = schedule.copy()
-                attempts = max(1, int(schedule.get("attempt_count", 1)))
-                delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+                started_at = schedule.get("execution_started_at")
+                if started_at:
+                    if isinstance(started_at, str):
+                        started_at = datetime.fromisoformat(started_at)
+                    if (now - started_at).total_seconds() < 90:
+                        return "confirming"
+                    previous = schedule.copy()
+                    attempts = max(1, int(schedule.get("attempt_count", 1)))
+                    delay = min(30 * (2 ** min(attempts - 1, 4)), 480)
+                    schedule["status"] = "pending"
+                    schedule.pop("execution_started_at", None)
+                    schedule["last_error"] = "VLC did not confirm the scheduled item became current"
+                    schedule["next_attempt_at"] = now.timestamp() + delay
+                    if not self._save_schedule_backup():
+                        schedule.clear()
+                        schedule.update(previous)
+                        logger.error("Could not persist retry state; keeping execution claim")
+                        return "confirming"
+                    return "retry"
                 schedule["status"] = "pending"
                 schedule.pop("execution_started_at", None)
-                schedule["last_error"] = "VLC did not confirm the scheduled item became current"
-                schedule["next_attempt_at"] = now.timestamp() + delay
-                if not self._save_schedule_backup():
-                    schedule.clear()
-                    schedule.update(previous)
-                    logger.error(
-                        "Could not persist retry state for scheduled movie '%s'; "
-                        "keeping its execution claim",
-                        schedule.get("title", "Unknown"),
-                    )
-                    return "confirming"
+
+            next_attempt = schedule.get("next_attempt_at")
+            if next_attempt is not None:
+                retry_at = (
+                    datetime.fromtimestamp(next_attempt, tz=now.tzinfo)
+                    if isinstance(next_attempt, (int, float)) else next_attempt
+                )
+                if retry_at > now:
+                    return "deferred"
+
+            if item_id is None:
+                self._retry_schedule(
+                    schedule, now,
+                    "scheduled media could not be resolved in the VLC playlist",
+                )
                 return "retry"
 
-            # Older persisted claims may not have an execution timestamp. They
-            # cannot use the confirmation window, so retry them immediately.
-            schedule["status"] = "pending"
-            schedule.pop("execution_started_at", None)
+            previous = schedule.copy()
+            schedule["status"] = "executing"
+            schedule["execution_started_at"] = now.isoformat()
+            schedule["attempt_count"] = int(schedule.get("attempt_count", 0)) + 1
+            schedule["target_item_id"] = str(item_id)
+            if not self._save_schedule_backup():
+                schedule.clear()
+                schedule.update(previous)
+                logger.error("Not starting scheduled movie because its execution claim could not be persisted")
+                return "retry"
 
-        next_attempt = schedule.get("next_attempt_at")
-        if next_attempt is not None:
-            if isinstance(next_attempt, (int, float)):
-                retry_at = datetime.fromtimestamp(next_attempt, tz=now.tzinfo)
-            else:
-                retry_at = next_attempt
-            if retry_at > now:
-                return "deferred"
-
-        if item_id is None:
-            self._retry_schedule(schedule, now, "scheduled media could not be resolved in the VLC playlist")
-            return "retry"
-
-        # Persist the claim before calling VLC so overlapping loop invocations
-        # and a restarted process can identify an interrupted attempt.
-        previous = schedule.copy()
-        schedule["status"] = "executing"
-        schedule["execution_started_at"] = now.isoformat()
-        schedule["attempt_count"] = int(schedule.get("attempt_count", 0)) + 1
-        schedule["target_item_id"] = str(item_id)
-        if not self._save_schedule_backup():
-            schedule.clear()
-            schedule.update(previous)
-            logger.error(
-                "Not starting scheduled movie '%s' because its execution claim "
-                "could not be persisted; restored its previous state",
-                schedule.get("title", "Unknown"),
-            )
-            return "retry"
-
+        # Keep the per-schedule lock in the caller, but release the global
+        # schedule-list lock while the serialized controller operation runs.
         try:
-            result = self.vlc.play_item(item_id)
+            result, confirmed = await self.vlc.run_async("play_item_and_confirm", item_id)
             succeeded = result is not None and result is not False
         except Exception as exc:
-            succeeded = False
+            result, confirmed, succeeded = None, False, False
             error = exc
         else:
             error = "VLC rejected the playback command"
 
         if not succeeded:
-            # A timeout or dropped HTTP connection is ambiguous: VLC may have
-            # executed the command before the response was lost. Keep the
-            # execution claim and confirm the current item before retrying.
-            schedule["last_error"] = str(error)
-            self._save_schedule_backup()
+            async with self._schedule_lock:
+                previous = schedule.copy()
+                schedule["last_error"] = str(error)
+                if not self._save_schedule_backup():
+                    schedule.clear()
+                    schedule.update(previous)
+                    logger.error("Could not persist ambiguous VLC command outcome")
             logger.warning(
-                "Scheduled movie '%s' has an unconfirmed VLC command; "
-                "retaining its execution claim: %s",
+                "Scheduled movie '%s' has an unconfirmed VLC command; retaining its execution claim: %s",
                 schedule.get("title", "Unknown"), error,
             )
             return "confirming"
-
-        # A successful HTTP/XML response only means VLC answered the request.
-        # Confirm that the requested playlist item is now current before
-        # consuming the durable schedule.
-        try:
-            playlist = self.vlc.get_playlist()
-            current_item = next(
-                (
-                    entry for entry in playlist.findall(".//leaf")
-                    if entry.get("current") is not None
-                ),
-                None,
-            ) if playlist is not None else None
-            confirmed = (
-                current_item is not None
-                and str(current_item.get("id")) == str(item_id)
-            )
-        except Exception as exc:
-            logger.warning("Could not confirm scheduled VLC playback: %s", exc)
-            confirmed = False
 
         if not confirmed:
             logger.info(
@@ -595,12 +563,15 @@ class Scheduler(commands.Cog):
             )
             return "confirming"
 
-        schedule["status"] = "announcing"
-        schedule.setdefault("started_announcement_sent_channels", [])
-        schedule.setdefault("started_metadata_sent_channels", [])
-        if not self._save_schedule_backup():
-            schedule["status"] = "executing"
-            return "confirming"
+        async with self._schedule_lock:
+            previous = schedule.copy()
+            schedule["status"] = "announcing"
+            schedule.setdefault("started_announcement_sent_channels", [])
+            schedule.setdefault("started_metadata_sent_channels", [])
+            if not self._save_schedule_backup():
+                schedule.clear()
+                schedule.update(previous)
+                return "confirming"
         return "announcing"
 
     async def _pre_announce_schedule(self, schedule):
@@ -749,24 +720,20 @@ class Scheduler(commands.Cog):
 
     @tasks.loop(seconds=30)
     async def check_schedules(self):
-        from src.config import Config
-
         async with self._schedule_lock:
             now = datetime.now(PH_TZ)
-            try:
-                resolved = self._rebind_due_schedules(now)
-            except Exception as exc:
-                logger.error("Error resolving scheduled items: %s", exc)
-                resolved = {}
             schedules = list(self.scheduled)
             schedule_locks = [
                 (schedule, self._get_schedule_lock(schedule))
                 for schedule in schedules
             ]
 
-        # A per-schedule lock protects an operation from unschedule/re-entry.
-        # The global lock is only held for snapshots and durable state changes;
-        # Discord fetch/send awaits never hold it.
+        try:
+            resolved = await self._rebind_due_schedules(now, schedules)
+        except Exception as exc:
+            logger.error("Error resolving scheduled items: %s", exc)
+            resolved = {}
+
         for schedule, operation_lock in schedule_locks:
             async with operation_lock:
                 async with self._schedule_lock:
@@ -775,13 +742,12 @@ class Scheduler(commands.Cog):
                     delta = (schedule["dt"] - now).total_seconds()
                     should_pre_announce = 0 < delta <= 600
                     should_execute = schedule["dt"] <= now
-                    if should_execute:
-                        outcome = self._execute_due_schedule(
-                            schedule, resolved.get(id(schedule), (None, None))[1], now
-                        )
-                    else:
-                        outcome = None
 
+                outcome = None
+                if should_execute:
+                    outcome = await self._execute_due_schedule(
+                        schedule, resolved.get(id(schedule), (None, None))[1], now
+                    )
                 if should_pre_announce:
                     async with self._schedule_lock:
                         already_preannounced = (
@@ -789,7 +755,5 @@ class Scheduler(commands.Cog):
                         )
                     if not already_preannounced:
                         await self._pre_announce_schedule(schedule)
-
                 if outcome == "announcing":
                     await self._announce_schedule_started(schedule)
-
