@@ -249,6 +249,8 @@ class PlaybackCommands(commands.Cog):
 
     async def cog_load(self):
         """Called when the cog is loaded"""
+        # Re-register stable component IDs so existing panel messages survive restarts.
+        self.bot.add_view(PlaybackControlView(self))
         self.monitoring_task = self.bot.loop.create_task(self._monitor_vlc_state())
         self.logger.info("VLC state monitoring started")
         # Schedule a one-time startup presence sync (runs after the bot is ready)
@@ -3453,7 +3455,7 @@ class PlaybackControlView(discord.ui.View):
     """Short-lived interactive panel that delegates to existing guarded commands."""
 
     def __init__(self, cog: PlaybackCommands):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
         self.cog = cog
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -3511,55 +3513,55 @@ class PlaybackControlView(discord.ui.View):
             except discord.HTTPException:
                 self.cog.logger.debug("Could not refresh playback panel message")
 
-    @discord.ui.button(label="Previous", emoji="⏮️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Previous", emoji="⏮️", style=discord.ButtonStyle.secondary, row=0, custom_id="ctrlvee:panel:previous")
     async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "previous_track")
 
-    @discord.ui.button(label="Play", emoji="▶️", style=discord.ButtonStyle.success, row=0)
+    @discord.ui.button(label="Play", emoji="▶️", style=discord.ButtonStyle.success, row=0, custom_id="ctrlvee:panel:play")
     async def play_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "play")
 
-    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.primary, row=0, custom_id="ctrlvee:panel:pause")
     async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "pause")
 
-    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
+    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger, row=0, custom_id="ctrlvee:panel:stop")
     async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "stop")
 
-    @discord.ui.button(label="Next", emoji="⏭️", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="Next", emoji="⏭️", style=discord.ButtonStyle.secondary, row=0, custom_id="ctrlvee:panel:next")
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "next_track")
 
-    @discord.ui.button(label="Restart", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Restart", emoji="🔁", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:restart")
     async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "restart")
 
-    @discord.ui.button(label="Rewind 10s", emoji="⏪", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Rewind 10s", emoji="⏪", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:rewind-10s")
     async def rewind_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "rewind", 10)
 
-    @discord.ui.button(label="Forward 10s", emoji="⏩", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="Forward 10s", emoji="⏩", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:forward-10s")
     async def forward_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "forward", 10)
 
-    @discord.ui.button(label="Rewind 30s", emoji="⏪", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Rewind 30s", emoji="⏪", style=discord.ButtonStyle.secondary, row=2, custom_id="ctrlvee:panel:rewind-30s")
     async def rewind_thirty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "rewind", 30)
 
-    @discord.ui.button(label="Forward 30s", emoji="⏩", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="Forward 30s", emoji="⏩", style=discord.ButtonStyle.secondary, row=2, custom_id="ctrlvee:panel:forward-30s")
     async def forward_thirty_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "forward", 30)
 
-    @discord.ui.button(label="Toggle Shuffle", emoji="🔀", style=discord.ButtonStyle.primary, row=1)
+    @discord.ui.button(label="Toggle Shuffle", emoji="🔀", style=discord.ButtonStyle.primary, row=1, custom_id="ctrlvee:panel:toggle-shuffle")
     async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "shuffle_toggle")
 
-    @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1, custom_id="ctrlvee:panel:view-queue")
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "queue_status")
 
-    @discord.ui.button(label="More Options", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="More Options", emoji="⚙️", style=discord.ButtonStyle.secondary, row=2, custom_id="ctrlvee:panel:more-options")
     async def advanced_options_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -3588,7 +3590,7 @@ class PlaybackControlView(discord.ui.View):
                 ephemeral=True,
             )
 
-    @discord.ui.button(label="Manage Queue", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="Manage Queue", emoji="🛠️", style=discord.ButtonStyle.primary, row=2, custom_id="ctrlvee:panel:manage-queue")
     async def manage_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -3619,7 +3621,7 @@ class PlaybackControlView(discord.ui.View):
                 ephemeral=True,
             )
 
-    @discord.ui.button(label="Add to Queue", emoji="➕", style=discord.ButtonStyle.success, row=2)
+    @discord.ui.button(label="Add to Queue", emoji="➕", style=discord.ButtonStyle.success, row=2, custom_id="ctrlvee:panel:add-to-queue")
     async def add_to_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
