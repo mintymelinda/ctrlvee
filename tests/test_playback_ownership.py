@@ -66,6 +66,38 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(view.move_earlier_button.disabled)
         self.assertTrue(view.move_later_button.disabled)
 
+    async def test_queue_manager_enforces_voice_room_guard_before_mutating(self):
+        cog = Mock()
+        cog._playback_guard = AsyncMock(return_value=(False, "Join the listening room"))
+        cog.vlc = SimpleNamespace(run_async=AsyncMock())
+        view = QueueManageView(
+            cog,
+            {"queued_items": {"track": {"queue_order": 1, "item_name": "Track"}}},
+            ET.fromstring('<playlist><leaf id="track" name="Track"/></playlist>'),
+        )
+        view.selected_queue_item_id = "track"
+        interaction = SimpleNamespace(
+            user=Mock(),
+            response=SimpleNamespace(
+                send_message=AsyncMock(),
+                defer=AsyncMock(),
+            ),
+            message=SimpleNamespace(edit=AsyncMock()),
+        )
+
+        await view._apply_queue_change(interaction, "remove")
+
+        cog._playback_guard.assert_awaited_once_with(
+            interaction.user,
+            presence_only=True,
+        )
+        interaction.response.send_message.assert_awaited_once_with(
+            "Join the listening room",
+            ephemeral=True,
+        )
+        interaction.response.defer.assert_not_awaited()
+        cog.vlc.run_async.assert_not_awaited()
+
     def test_queue_picker_preserves_playlist_positions_and_limits_options(self):
         playlist = [
             ET.Element("leaf", {"name": f"Track {position}"})
