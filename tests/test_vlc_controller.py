@@ -423,6 +423,28 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.get_next_queued_item()["queue_id"], "queue-entry")
         self.assertEqual(self.controller.get_next_queued_item()["item_id"], "new-vlc-id")
 
+    def test_reconciliation_does_not_trust_recycled_vlc_id_with_different_uri(self):
+        self.controller._queued_items = {
+            "queue-entry": {
+                "queue_id": "queue-entry",
+                "playlist_item_id": "reused-vlc-id",
+                "item_id": "reused-vlc-id",
+                "media_uri": "file:///media/original.mkv",
+                "item_name": "Original",
+                "queue_order": 1,
+            }
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="reused-vlc-id" name="Different media" uri="file:///media/other.mkv"/>'
+            '<leaf id="new-vlc-id" name="Original" uri="file:///media/original.mkv"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist):
+            result = self.controller.reconcile_queue_with_playlist()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["rebound_queue_ids"], ["queue-entry"])
+        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "new-vlc-id")
+
     def test_reconciliation_keeps_entry_when_media_uri_matches_multiple_vlc_items(self):
         self.controller._queued_items = {
             "queue-entry": {
