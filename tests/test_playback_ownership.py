@@ -7,6 +7,7 @@ from src.config import Config
 from src.cogs.playback import (
     PlaybackCommands,
     PlaybackControlView,
+    QueuePlaylistSelect,
     _decide_playback_allow,
     _member_has_allowed_role,
 )
@@ -28,6 +29,24 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         labels = {button.label for button in view.children}
         self.assertTrue({"Previous", "Play", "Pause", "Stop", "Next", "Restart"}.issubset(labels))
         self.assertTrue({"Toggle Shuffle", "View Queue"}.issubset(labels))
+
+    def test_playback_panel_exposes_add_to_queue_button(self):
+        view = PlaybackControlView(Mock())
+        self.assertIn("Add to Queue", {button.label for button in view.children})
+
+    def test_queue_picker_preserves_playlist_positions_and_limits_options(self):
+        playlist = [
+            ET.Element("leaf", {"name": f"Track {position}"})
+            for position in range(1, 31)
+        ]
+        view = PlaybackControlView(Mock())
+        picker = QueuePlaylistSelect(view, playlist)
+
+        self.assertEqual(len(picker.options), 25)
+        self.assertEqual(picker.options[0].label, "Track 1")
+        self.assertEqual(picker.options[0].value, "1")
+        self.assertEqual(picker.options[-1].label, "Track 25")
+        self.assertEqual(picker.options[-1].value, "25")
 
     async def test_playback_panel_embed_summarizes_soft_queue_and_shuffle(self):
         cog = PlaybackCommands.__new__(PlaybackCommands)
