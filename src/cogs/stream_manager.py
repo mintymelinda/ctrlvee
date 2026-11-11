@@ -103,6 +103,7 @@ class StreamManagerCommands(commands.Cog):
                 member = await guild.fetch_member(assignment["user_id"])
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 logger.warning("Assigned stream manager %s is unavailable in guild %s", assignment["user_id"], guild.id)
+                self._alerted_guilds.add(guild.id)
                 return
         channel = await self._notification_channel(guild, assignment)
         if channel is None:
@@ -183,7 +184,8 @@ class StreamManagerCommands(commands.Cog):
                 member.guild,
                 "Your screen share stopped while VLC is still playing. Please restart your VLC screen share.",
             )
-        elif sharing:
+        elif sharing or after.channel is not None:
+            # A returning manager gets a fresh check on the next monitor tick.
             self._alerted_guilds.discard(member.guild.id)
 
     @commands.command(name="stream_manager", aliases=["streammanager"])
