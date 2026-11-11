@@ -3405,39 +3405,135 @@ class QueuePlaylistSelect(discord.ui.Select):
         )
 
 
+def _filter_queue_playlist_items(playlist_items, query):
+    """Filter indexed VLC playlist entries while preserving their original positions."""
+    query_tokens = re.findall(r"\w+", str(query or "").casefold())
+    if not query_tokens:
+        return list(playlist_items)
+
+    query_text = " ".join(query_tokens)
+    matches = []
+    for position, item in playlist_items:
+        searchable = " ".join(
+            str(item.get(field) or "")
+            for field in ("name", "uri")
+        ).casefold()
+        searchable_tokens = re.findall(r"\w+", searchable)
+        searchable_text = " ".join(searchable_tokens)
+        if query_text in searchable_text or all(
+            token in searchable_tokens for token in query_tokens
+        ):
+            matches.append((position, item))
+    return matches
+
+
+class QueuePlaylistSearchModal(discord.ui.Modal, title="Search VLC playlist"):
+    """Collect a private playlist search without adding permanent panel buttons."""
+
+    def __init__(self, picker_view):
+        super().__init__(timeout=120)
+        self.picker_view = picker_view
+        self.query = discord.ui.TextInput(
+            label="Title or filename",
+            placeholder="Search the VLC playlist",
+            required=False,
+            max_length=100,
+        )
+        self.add_item(self.query)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not await self.picker_view._authorized(interaction):
+            return
+        await self.picker_view.apply_search(
+            interaction,
+            str(self.query.value or "").strip(),
+        )
+
+
 class QueuePlaylistView(discord.ui.View):
-    """Private paginated playlist picker for adding any playlist item to the queue."""
+    """Private, bounded playlist picker with search across the loaded playlist."""
 
     page_size = 25
 
-    def __init__(self, playback_view, playlist_items, page=0):
+    def __init__(self, playback_view, playlist_items, page=0, requester_id=None):
         super().__init__(timeout=120)
         self.playback_view = playback_view
-        self.playlist_items = [
+        self.requester_id = requester_id
+        self.all_playlist_items = [
             (position, item)
             for position, item in enumerate(playlist_items, 1)
             if item.get("id")
         ]
-        self.page_count = max(1, (len(self.playlist_items) + self.page_size - 1) // self.page_size)
+        self.search_query = ""
+        self.playlist_items = list(self.all_playlist_items)
         self.page = min(max(0, page), self.page_count - 1)
-        self.add_item(QueuePlaylistSelect(self))
+        self._refresh_select()
+        self._update_navigation()
+
+    @property
+    def page_count(self):
+        return max(1, (len(self.playlist_items) + self.page_size - 1) // self.page_size)
+
+    def _page_content(self):
+        if not self.playlist_items:
+            return f'No playlist items matched "{self.search_query}". Use Search to try another query.'
+        if self.search_query:
+            return (
+                f'Search results for **{self.search_query}** '
+                f'({len(self.playlist_items)} matches). Choose an item to add to the soft queue.'
+            )
+        return f"Choose a playlist item to add to the soft queue ({len(self.playlist_items)} items)."
+
+    async def _authorized(self, interaction):
+        if self.requester_id is not None and interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "That playlist picker belongs to someone else.",
+                ephemeral=True,
+            )
+            return False
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    def _refresh_select(self):
+        current_select = next(
+            (child for child in self.children if isinstance(child, QueuePlaylistSelect)),
+            None,
+        )
+        if current_select is not None:
+            self.remove_item(current_select)
+        if self.playlist_items:
+            self.add_item(QueuePlaylistSelect(self))
+
+    def _update_navigation(self):
         self.previous_button.disabled = self.page == 0
         self.next_button.disabled = self.page >= self.page_count - 1
         self.page_button.label = f"Page {self.page + 1}/{self.page_count}"
 
+    async def apply_search(self, interaction, query):
+        self.search_query = query
+        self.playlist_items = _filter_queue_playlist_items(
+            self.all_playlist_items,
+            query,
+        )
+        self.page = 0
+        self._refresh_select()
+        self._update_navigation()
+        await interaction.response.edit_message(
+            content=self._page_content(),
+            view=self,
+        )
+
     async def _change_page(self, interaction, offset):
         self.page = min(max(0, self.page + offset), self.page_count - 1)
-        current_select = next(
-            child for child in self.children
-            if isinstance(child, QueuePlaylistSelect)
-        )
-        self.remove_item(current_select)
-        self.add_item(QueuePlaylistSelect(self))
-        self.previous_button.disabled = self.page == 0
-        self.next_button.disabled = self.page >= self.page_count - 1
-        self.page_button.label = f"Page {self.page + 1}/{self.page_count}"
+        self._refresh_select()
+        self._update_navigation()
         await interaction.response.edit_message(
-            content="Choose a playlist item to add to the soft queue.",
+            content=self._page_content(),
             view=self,
         )
 
@@ -3452,6 +3548,13 @@ class QueuePlaylistView(discord.ui.View):
     @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=1)
     async def next_button(self, interaction, button):
         await self._change_page(interaction, 1)
+
+    @discord.ui.button(label="Search", emoji="🔎", style=discord.ButtonStyle.primary, row=1)
+    async def search_button(self, interaction, button):
+        await interaction.response.send_modal(QueuePlaylistSearchModal(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        return await self._authorized(interaction)
 
 
 class QueueManageSelect(discord.ui.Select):
@@ -3940,7 +4043,11 @@ class PlaybackControlView(discord.ui.View):
 
             await interaction.followup.send(
                 "Choose a playlist item to add to the soft queue.",
-                view=QueuePlaylistView(self, playlist_items),
+                view=QueuePlaylistView(
+                    self,
+                    playlist_items,
+                    requester_id=interaction.user.id,
+                ),
                 ephemeral=True,
             )
         except Exception:
