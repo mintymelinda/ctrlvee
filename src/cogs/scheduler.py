@@ -462,13 +462,47 @@ class Scheduler(commands.Cog):
 
     async def _execute_due_schedule(self, schedule, leaf, now):
         """Execute one due job without holding the list lock over VLC I/O."""
+        # Reconcile a claimed execution against live VLC state before allowing
+        # its retry path to issue another command. This read uses the controller's
+        # shared serialization lock, never the global schedule-list lock.
+        live_item_id = None
+        if schedule.get("status") == "executing" and schedule.get("source_item_id"):
+            try:
+                _, live_playlist = await self.vlc.run_async("get_playback_snapshot")
+                live_item, _ = self.vlc._current_playlist_item(live_playlist)
+                live_item_id = live_item.get("id") if live_item is not None else None
+            except Exception:
+                logger.exception("Could not reconcile live playback for scheduled movie '%s'", schedule.get("title"))
+
         async with self._schedule_lock:
             if schedule.get("status") == "announcing":
                 return "announcing"
             item_id = leaf.get("id") if leaf is not None else None
 
             if schedule.get("status") == "executing":
+                source_item_id = schedule.get("source_item_id")
                 claimed_item_id = schedule.get("target_item_id")
+                if (
+                    source_item_id is not None
+                    and live_item_id is not None
+                    and str(live_item_id) not in {
+                        str(source_item_id), str(claimed_item_id)
+                    }
+                ):
+                    previous = schedule.copy()
+                    self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
+                    if not self._save_schedule_backup():
+                        self.scheduled = [*self.scheduled, schedule]
+                        schedule.clear()
+                        schedule.update(previous)
+                        logger.error("Could not persist superseded scheduled playback removal")
+                        return "confirming"
+                    getattr(self, "_schedule_locks", {}).pop(id(schedule), None)
+                    logger.info(
+                        "Discarded scheduled movie '%s' after a newer playback selection superseded it",
+                        schedule.get("title", "Unknown"),
+                    )
+                    return "superseded"
                 if (
                     item_id is not None and claimed_item_id is not None
                     and str(item_id) == str(claimed_item_id)
@@ -537,13 +571,25 @@ class Scheduler(commands.Cog):
         # Keep the per-schedule lock in the caller, but release the global
         # schedule-list lock while the serialized controller operation runs.
         try:
-            result, confirmed = await self.vlc.run_async("play_item_and_confirm", item_id)
+            result, confirmed, source_item_id = await self.vlc.run_async(
+                "play_item_and_confirm", item_id
+            )
             succeeded = result is not None and result is not False
         except Exception as exc:
-            result, confirmed, succeeded = None, False, False
+            result, confirmed, source_item_id, succeeded = None, False, None, False
             error = exc
         else:
             error = "VLC rejected the playback command"
+
+        async with self._schedule_lock:
+            previous = schedule.copy()
+            schedule["source_item_id"] = (
+                str(source_item_id) if source_item_id is not None else None
+            )
+            if not self._save_schedule_backup():
+                schedule.clear()
+                schedule.update(previous)
+                logger.error("Could not persist source identity for scheduled playback")
 
         if not succeeded:
             async with self._schedule_lock:
