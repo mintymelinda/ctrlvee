@@ -350,6 +350,65 @@ class VLCControllerTests(unittest.TestCase):
         self.assertIn("already starting", second["error"])
         play.assert_called_once_with("A")
 
+    def test_play_next_or_advance_returns_queue_item_identity(self):
+        queued = {"success": True, "item_id": "queued-7", "item_name": "Queued", "queue_order": 1}
+        with patch.object(self.controller, "get_next_queued_item", return_value={"item_id": "queued-7"}), patch.object(
+            self.controller, "play_next_queued_item", return_value=queued
+        ), patch.object(self.controller, "next") as next_track:
+            result = self.controller.play_next_or_advance()
+
+        self.assertEqual(result["expected_item_id"], "queued-7")
+        self.assertFalse(result["next_success"])
+        next_track.assert_not_called()
+
+    def test_play_next_or_advance_captures_current_item_after_fallback(self):
+        playlist = ET.fromstring('<playlist><leaf id="old"/><leaf id="new" current="current"/></playlist>')
+        with patch.object(self.controller, "get_next_queued_item", return_value=None), patch.object(
+            self.controller, "next", return_value=True
+        ), patch.object(self.controller, "get_playlist", return_value=playlist):
+            result = self.controller.play_next_or_advance()
+
+        self.assertTrue(result["next_success"])
+        self.assertEqual(result["expected_item_id"], "new")
+        self.assertEqual(result["position"], 2)
+
+    def test_previous_and_capture_returns_the_selected_item_identity(self):
+        playlist = ET.fromstring('<playlist><leaf id="previous" current="current"/></playlist>')
+        with patch.object(self.controller, "previous", return_value=True), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ):
+            result = self.controller.previous_and_capture()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["expected_item_id"], "previous")
+        self.assertEqual(result["position"], 1)
+
+    def test_current_item_confirmation_rejects_a_newer_selection(self):
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="newer" current="current"/></playlist>')
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ):
+            result = self.controller.get_current_item_if_unchanged("stale")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "selection_changed")
+        self.assertEqual(result["current_item_id"], "newer")
+
+    def test_current_item_confirmation_returns_fresh_matching_snapshot(self):
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="current" current="current" name="Current"/></playlist>')
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ):
+            result = self.controller.get_current_item_if_unchanged("current")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["item_id"], "current")
+        self.assertEqual(result["item"].get("name"), "Current")
+        self.assertEqual(result["state"], "playing")
+
+
 if __name__ == "__main__":
     unittest.main()
 

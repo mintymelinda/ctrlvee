@@ -2094,6 +2094,86 @@ class PlaybackCommands(commands.Cog):
         except ValueError:
             await ctx.send('Please provide a valid number')
             
+    async def _confirm_navigation_target(
+        self,
+        ctx,
+        expected_item_id: str | None,
+        fallback_message: str,
+        queued_result: dict | None = None,
+    ) -> bool:
+        """Announce a navigation result only if its selected item is still current."""
+        if expected_item_id is None:
+            logger.warning("Navigation command completed without a captured current item")
+            await ctx.send(fallback_message)
+            return False
+
+        await asyncio.sleep(3)
+        confirmation = await self.vlc.run_async(
+            "get_current_item_if_unchanged", expected_item_id
+        )
+        if confirmation.get("reason") == "selection_changed":
+            logger.info(
+                "Skipping stale navigation announcement for item %s; current item is %s",
+                expected_item_id,
+                confirmation.get("current_item_id"),
+            )
+            return False
+        if not confirmation.get("success"):
+            await ctx.send(fallback_message)
+            return False
+
+        if confirmation.get("state") != "playing":
+            await asyncio.sleep(2)
+            confirmation = await self.vlc.run_async(
+                "get_current_item_if_unchanged", expected_item_id
+            )
+            if not confirmation.get("success"):
+                if confirmation.get("reason") == "selection_changed":
+                    logger.info(
+                        "Skipping stale navigation retry for item %s; current item is %s",
+                        expected_item_id,
+                        confirmation.get("current_item_id"),
+                    )
+                    return False
+                await ctx.send(fallback_message)
+                return False
+
+        if confirmation.get("state") != "playing":
+            await ctx.send(fallback_message)
+            return False
+
+        item = confirmation.get("item")
+        position = confirmation.get("position")
+        if item is None:
+            await ctx.send(fallback_message)
+            return False
+
+        self._seat_playback_owner(ctx.author, expected_item_id)
+        if queued_result is not None:
+            embed = discord.Embed(
+                title="🎵 Playing Queued Item",
+                description=f"Now playing: **{queued_result['item_name']}**",
+                color=discord.Color.green(),
+            )
+            embed.add_field(
+                name="Queue Info",
+                value=f"This was queued item #{queued_result.get('queue_order', 'unknown')}",
+                inline=True,
+            )
+            await ctx.send(embed=embed)
+            try:
+                await self._set_presence(queued_result.get("item_name"), reason="next (queued)")
+            except Exception:
+                pass
+        else:
+            await self._announce_now_playing("command", item, position)
+
+        try:
+            self._suppress_auto_announce_until = asyncio.get_event_loop().time() + 5.0
+        except Exception:
+            pass
+        return True
+
     @commands.command(name='next')
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def next_track(self, ctx):
@@ -2109,61 +2189,27 @@ class PlaybackCommands(commands.Cog):
         # Resolve the queue and issue the selected playback command atomically.
         decision = await self.vlc.run_async("play_next_or_advance")
         queued_result = decision.get("queued_result")
+        if queued_result and not queued_result.get("success"):
+            await ctx.send(f"Error playing queued item: {queued_result.get('error', 'Unknown error')}")
         if queued_result and queued_result.get("success"):
             result = queued_result
-            embed = discord.Embed(
-                title="🎵 Playing Queued Item",
-                description=f"Now playing: **{result['item_name']}**",
-                color=discord.Color.green()
+            await self._confirm_navigation_target(
+                ctx,
+                decision.get("expected_item_id"),
+                "The queued item did not remain selected; no now-playing update was sent.",
+                queued_result=result,
             )
-            embed.add_field(
-                name="Queue Info",
-                value=f"This was queued item #{result.get('queue_order', 'unknown')}",
-                inline=True
-            )
-            await ctx.send(embed=embed)
-            try:
-                await self._set_presence(result.get('item_name'), reason="next (queued)")
-            except Exception:
-                pass
             return
-        if queued_result:
-            await ctx.send(f"Error playing queued item: {queued_result.get('error', 'Unknown error')}")
 
         if decision.get("next_success"):
             logger.info("Loading next track")
             await ctx.send('Loading next track...')
-            try:
-                # Mark that this change was initiated by our command to suppress one auto announce
-                self._command_initiated_change = True
-            except Exception:
-                pass
-            await asyncio.sleep(3)  # Give VLC time to load and start playing the file
-            
-            status = await self.vlc.run_async("get_status")
-            if not status:
-                await ctx.send('Skipped to next track')
-                return
-                
-            state = status.find('state').text
-            if state != 'playing':
-                # If not playing yet, wait a bit longer
-                await asyncio.sleep(2)
-                status = await self.vlc.run_async("get_status")
-            
-            playlist = await self.vlc.run_async("get_playlist")
-            if status and playlist:
-                position, current_item = self._find_current_position(playlist)
-                if current_item is not None:
-                    await self._announce_now_playing('command', current_item, position)
-                    try:
-                        self._suppress_auto_announce_until = asyncio.get_event_loop().time() + 5.0
-                    except Exception:
-                        pass
-                else:
-                    await ctx.send('Skipped to next track')
-            else:
-                await ctx.send('Skipped to next track')
+            self._command_initiated_change = True
+            await self._confirm_navigation_target(
+                ctx,
+                decision.get("expected_item_id"),
+                "Skipped to next track",
+            )
         else:
             await ctx.send('Error: Could not skip to next track')
             
@@ -2179,51 +2225,16 @@ class PlaybackCommands(commands.Cog):
             await ctx.send(reason)
             return
 
-        if await self.vlc.run_async("previous"):
+        decision = await self.vlc.run_async("previous_and_capture")
+        if decision.get("success"):
             logger.info("Loading previous track")
             await ctx.send('Loading previous track...')
-            try:
-                self._command_initiated_change = True
-            except Exception:
-                pass
-            await asyncio.sleep(3)  # Give VLC time to load and start playing the file
-            
-            status = await self.vlc.run_async("get_status")
-            if not status:
-                await ctx.send('Jumped to previous track')
-                return
-                
-            state = status.find('state').text
-            if state != 'playing':
-                # If not playing yet, wait a bit longer
-                await asyncio.sleep(2)
-                status = await self.vlc.run_async("get_status")
-            
-            playlist = await self.vlc.run_async("get_playlist")
-            if status and playlist:
-                # Find current item
-                current_item = None
-                for item in playlist.findall('.//leaf'):
-                    if item.get('current'):
-                        current_item = item
-                        break
-                        
-                if current_item is not None:
-                    # Find the position number of the current item
-                    position = None
-                    for i, item in enumerate(playlist.findall('.//leaf')):
-                        if item.get('id') == current_item.get('id'):
-                            position = i + 1  # Convert to 1-based index
-                            break
-                    await self._announce_now_playing('command', current_item, position)
-                    try:
-                        self._suppress_auto_announce_until = asyncio.get_event_loop().time() + 5.0
-                    except Exception:
-                        pass
-                else:
-                    await ctx.send('Jumped to previous track')
-            else:
-                await ctx.send('Jumped to previous track')
+            self._command_initiated_change = True
+            await self._confirm_navigation_target(
+                ctx,
+                decision.get("expected_item_id"),
+                "Jumped to previous track",
+            )
         else:
             await ctx.send('Error: Could not jump to previous track')
 
