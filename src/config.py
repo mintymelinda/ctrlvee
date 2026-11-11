@@ -215,6 +215,8 @@ class Config:
     ENABLE_VOICE_ROOM_RULES: bool = os.getenv('ENABLE_VOICE_ROOM_RULES', 'true').strip().lower() in {'1', 'true', 'yes', 'y'}
     # Whether to join voice immediately on startup (default: true)
     VOICE_AUTO_JOIN_ON_START: bool = os.getenv('VOICE_AUTO_JOIN_ON_START', 'true').strip().lower() in {'1','true','yes','y'}
+    # Join the command author's current voice channel before playback controls (opt-in).
+    VOICE_AUTO_JOIN_ON_COMMAND: bool = os.getenv('VOICE_AUTO_JOIN_ON_COMMAND', 'false').strip().lower() in {'1','true','yes','y'}
     # Voice reconnect and connection tuning
     VOICE_MAX_RECONNECTS: int = int(os.getenv('VOICE_MAX_RECONNECTS', '3'))
     VOICE_RECONNECT_WINDOW: int = int(os.getenv('VOICE_RECONNECT_WINDOW', '60'))  # seconds
@@ -388,6 +390,7 @@ class Config:
             f"Voice Join Enabled: {cls.ENABLE_VOICE_JOIN}",
             f"Voice Channel ID: {cls.VOICE_JOIN_CHANNEL_ID if cls.VOICE_JOIN_CHANNEL_ID else 'Not Configured'}",
             f"Auto Join On Start: {cls.VOICE_AUTO_JOIN_ON_START}",
+            f"Auto Join Requester's Voice Channel On Command: {cls.VOICE_AUTO_JOIN_ON_COMMAND}",
             f"Voice Max Reconnects: {cls.VOICE_MAX_RECONNECTS}",
             f"Voice Reconnect Window: {cls.VOICE_RECONNECT_WINDOW}s",
             f"Voice Reconnect Cooldown: {cls.VOICE_RECONNECT_COOLDOWN}s",
