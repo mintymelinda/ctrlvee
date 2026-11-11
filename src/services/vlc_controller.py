@@ -867,9 +867,9 @@ class VLCController:
         if not isinstance(media_uri, str) or not media_uri.strip():
             self.logger.warning("Cannot play queued media without a valid URI")
             return None
-        if self.send_command("pl_empty") is None:
-            self.logger.warning("VLC rejected playlist clear before bot-owned queue playback")
-            return None
+        # VLC's supported in_play operation appends and starts this URI. The
+        # bot queue remains authoritative; we never delete or reorder playlist
+        # entries using the unsupported pl_delete command.
         response = self.send_command("in_play", {"input": media_uri, "name": item_name})
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
