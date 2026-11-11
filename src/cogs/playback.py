@@ -31,6 +31,20 @@ def _decide_playback_allow(
         return False, "hijack"
     return True, ""
 
+def _member_has_allowed_role(member, allowed_roles) -> bool:
+    """Match configured role names and IDs for interaction-based controls."""
+    member_roles = getattr(member, "roles", ())
+    for role in member_roles:
+        role_id = str(getattr(role, "id", ""))
+        role_name = getattr(role, "name", "")
+        for allowed in allowed_roles:
+            if isinstance(allowed, int) and role_id == str(allowed):
+                return True
+            if isinstance(allowed, str) and allowed.strip() in (role_name, role_id):
+                return True
+    return False
+
+
 
 
 class PlaybackCommands(commands.Cog):
@@ -1917,6 +1931,40 @@ class PlaybackCommands(commands.Cog):
             self.logger.error(f"Error getting status embed: {e}")
             return None
             
+
+    async def _playback_panel_embed(self) -> discord.Embed:
+        """Build a fresh status embed for the interactive playback panel."""
+        embed = discord.Embed(title="VLC Playback Controls", color=discord.Color.blue())
+        try:
+            status, playlist = await self.vlc.run_async("get_playback_snapshot")
+            state_element = status.find("state") if status is not None else None
+            state = state_element.text if state_element is not None else "unavailable"
+            current_item = None
+            if playlist is not None:
+                current_item = next(
+                    (item for item in playlist.findall(".//leaf") if item.get("current")),
+                    None,
+                )
+            embed.add_field(name="State", value=str(state).capitalize(), inline=True)
+            embed.add_field(
+                name="Now Playing",
+                value=(current_item.get("name") if current_item is not None else "Nothing"),
+                inline=False,
+            )
+        except Exception:
+            embed.description = "VLC status is currently unavailable."
+        embed.set_footer(text="Use the buttons below to control playback.")
+        return embed
+
+    @commands.command(name="panel", aliases=["playback_panel"])
+    @commands.has_any_role(*Config.ALLOWED_ROLES)
+    async def playback_panel(self, ctx):
+        """Post an interactive playback control panel."""
+        await ctx.send(
+            embed=await self._playback_panel_embed(),
+            view=PlaybackControlView(self),
+        )
+
     @commands.command(name='play',aliases=['start','resume'])
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def play(self, ctx):
@@ -2943,3 +2991,72 @@ class PlaybackCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error in shuffle_toggle command: {e}")
             await ctx.send(f'Error toggling shuffle: {str(e)}')
+
+class PlaybackControlView(discord.ui.View):
+    """Short-lived interactive panel that delegates to existing guarded commands."""
+
+    def __init__(self, cog: PlaybackCommands):
+        super().__init__(timeout=300)
+        self.cog = cog
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _dispatch(self, interaction: discord.Interaction, command_name: str) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        class InteractionContext:
+            def __init__(self, current_interaction):
+                self.author = current_interaction.user
+                self.guild = current_interaction.guild
+                self.channel = current_interaction.channel
+                self.message = current_interaction.message
+                self._interaction = current_interaction
+
+            async def send(self, content=None, *, embed=None, **kwargs):
+                kwargs.pop("ephemeral", None)
+                return await self._interaction.followup.send(
+                    content=content,
+                    embed=embed,
+                    ephemeral=True,
+                    **kwargs,
+                )
+
+        command = getattr(self.cog, command_name)
+        await command.callback(self.cog, InteractionContext(interaction))
+        if interaction.message is not None:
+            await interaction.message.edit(
+                embed=await self.cog._playback_panel_embed(),
+                view=self,
+            )
+
+    @discord.ui.button(label="Previous", emoji="⏮️", style=discord.ButtonStyle.secondary, row=0)
+    async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "previous_track")
+
+    @discord.ui.button(label="Play", emoji="▶️", style=discord.ButtonStyle.success, row=0)
+    async def play_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "play")
+
+    @discord.ui.button(label="Pause", emoji="⏸️", style=discord.ButtonStyle.primary, row=0)
+    async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "pause")
+
+    @discord.ui.button(label="Stop", emoji="⏹️", style=discord.ButtonStyle.danger, row=0)
+    async def stop_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "stop")
+
+    @discord.ui.button(label="Next", emoji="⏭️", style=discord.ButtonStyle.secondary, row=0)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "next_track")
+
+    @discord.ui.button(label="Restart", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
+    async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "restart")
+
