@@ -1,10 +1,11 @@
 import unittest
+from unittest.mock import AsyncMock
 import xml.etree.ElementTree as ET
 
 from src.cogs.playlist import PlaySearchView, PlaylistCommands
 
 
-class SearchPickerTests(unittest.TestCase):
+class SearchPickerTests(unittest.IsolatedAsyncioTestCase):
     def _results(self, count):
         return [
             (index + 1, ET.Element("leaf", {
@@ -35,14 +36,14 @@ class SearchPickerTests(unittest.TestCase):
         self.assertIn("Next", labels)
         self.assertIn("Cancel", labels)
 
-    def test_search_ties_are_sorted_by_playlist_position(self):
+    async def test_search_ties_are_sorted_by_playlist_position(self):
         cog = PlaylistCommands.__new__(PlaylistCommands)
-        cog._get_playlist_items = lambda: [
+        cog._get_playlist_items = AsyncMock(return_value=[
             ET.Element("leaf", {"name": "Futurama S01E01.mkv", "id": "1"}),
             ET.Element("leaf", {"name": "Futurama S01E01.mkv", "id": "2"}),
             ET.Element("leaf", {"name": "Futurama S01E01.mkv", "id": "3"}),
-        ]
-        results = cog._search_items("Futurama S01E01")
+        ])
+        results = await cog._search_items("Futurama S01E01")
         self.assertEqual([number for number, _ in results], [1, 2, 3])
 
 

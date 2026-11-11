@@ -1,12 +1,12 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from src.config import Config
 from src.cogs.playback import PlaybackCommands, _decide_playback_allow
 
 
-class PlaybackOwnershipTests(unittest.TestCase):
+class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     def test_pure_guard_allows_when_no_room_is_configured(self):
         self.assertEqual(_decide_playback_allow(False, True, 1, None, False, False), (True, ""))
 
@@ -40,7 +40,7 @@ class PlaybackOwnershipTests(unittest.TestCase):
             (True, ""),
         )
 
-    def test_guard_requires_room_presence_and_resolves_owner_membership(self):
+    async def test_guard_requires_room_presence_and_resolves_owner_membership(self):
         room = SimpleNamespace(id=100, name="Listening Room")
         owner = SimpleNamespace(
             id=1,
@@ -57,16 +57,16 @@ class PlaybackOwnershipTests(unittest.TestCase):
         cog._playback_owner_id = 1
         cog._playback_owner_item_id = "7"
         cog._resolve_room_channel = lambda _guild: room
-        cog._current_stream_item_id = lambda: "7"
+        cog._current_stream_item_id = AsyncMock(return_value="7")
 
         with patch.object(Config, "ENABLE_VOICE_ROOM_RULES", True), patch.object(
             Config, "VOICE_JOIN_CHANNEL_ID", 100
         ):
-            allowed, reason = cog._playback_guard(requester)
+            allowed, reason = await cog._playback_guard(requester)
         self.assertFalse(allowed)
         self.assertIn("Owner", reason)
 
-    def test_presence_only_still_requires_room_but_skips_hijack(self):
+    async def test_presence_only_still_requires_room_but_skips_hijack(self):
         room = SimpleNamespace(id=100, name="Listening Room")
         guild = SimpleNamespace(get_member=lambda _user_id: None)
         requester = SimpleNamespace(
@@ -78,16 +78,16 @@ class PlaybackOwnershipTests(unittest.TestCase):
         cog._playback_owner_id = 1
         cog._playback_owner_item_id = "7"
         cog._resolve_room_channel = lambda _guild: room
-        cog._current_stream_item_id = lambda: "7"
+        cog._current_stream_item_id = AsyncMock(return_value="7")
 
         with patch.object(Config, "ENABLE_VOICE_ROOM_RULES", True), patch.object(
             Config, "VOICE_JOIN_CHANNEL_ID", 100
         ):
-            allowed, reason = cog._playback_guard(requester, presence_only=True)
+            allowed, reason = await cog._playback_guard(requester, presence_only=True)
         self.assertTrue(allowed)
         self.assertEqual(reason, "")
 
-    def test_unresolvable_configured_room_fails_closed(self):
+    async def test_unresolvable_configured_room_fails_closed(self):
         guild = SimpleNamespace(get_member=lambda _user_id: None)
         requester = SimpleNamespace(id=2, guild=guild, voice=None)
         cog = PlaybackCommands.__new__(PlaybackCommands)
@@ -97,7 +97,7 @@ class PlaybackOwnershipTests(unittest.TestCase):
         with patch.object(Config, "ENABLE_VOICE_ROOM_RULES", True), patch.object(
             Config, "VOICE_JOIN_CHANNEL_ID", 100
         ):
-            allowed, reason = cog._playback_guard(requester)
+            allowed, reason = await cog._playback_guard(requester)
         self.assertFalse(allowed)
         self.assertIn("VOICE_JOIN_CHANNEL_ID", reason)
 
