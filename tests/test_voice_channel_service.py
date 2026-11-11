@@ -20,6 +20,7 @@ class VoiceChannelServiceTests(unittest.IsolatedAsyncioTestCase):
             connect=AsyncMock(),
         )
         self.guild.get_channel.return_value = self.channel
+        self.bot.guilds = [self.guild]
 
     async def test_join_channel_connects_and_records_target(self):
         voice_client = Mock()
@@ -43,6 +44,7 @@ class VoiceChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(reason, "joined")
         self.channel.connect.assert_awaited_once()
         self.assertEqual(self.service.get_target_channel(self.guild), self.channel)
+        self.assertIs(self.service.get_any_target_channel(), self.channel)
 
     async def test_join_channel_moves_existing_connection(self):
         old_channel = SimpleNamespace(id=199)
