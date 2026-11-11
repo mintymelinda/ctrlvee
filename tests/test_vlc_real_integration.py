@@ -205,6 +205,19 @@ class RealVLCIntegrationTests(unittest.TestCase):
             f"VLC to select playlist item {item_id}",
         )
 
+    def wait_for_current_uri(self, media_uri):
+        return self.wait_for(
+            lambda: item.get("id")
+            if (playlist := self.controller.get_playlist()) is not None
+            and (item := next(
+                (leaf for leaf in playlist.findall(".//leaf")
+                 if leaf.get("current") and leaf.get("uri") == media_uri),
+                None,
+            )) is not None
+            else None,
+            f"VLC to play media URI {media_uri}",
+        )
+
     def test_real_vlc_playlist_navigation_and_repeat_modes(self):
         first_id, second_id, third_id = self.load_playlist()
         self.controller.play_item(first_id)
@@ -293,11 +306,12 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         queued_play = self.controller.play_next_queued_item()
         self.assertTrue(queued_play["success"], queued_play)
-        self.wait_for_current_item(third_id)
-        self.assertEqual(queued_play["item_id"], third_id)
+        current = self.wait_for_current_uri(self.media_paths[2].as_uri())
+        self.assertEqual(queued_play["item_id"], current)
         self.assertEqual(queued_play["queue_id"], second["queue_id"])
+        self.assertEqual(len(self.controller.get_playlist().findall(".//leaf")), 4)
 
-    def test_real_vlc_soft_queue_survives_controller_restart_and_prunes_missing_items(self):
+    def test_real_vlc_bot_owned_queue_survives_controller_restart_and_playlist_reset(self):
         first_id, second_id, third_id = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
         self.wait_for_current_item(first_id)
@@ -309,8 +323,6 @@ class RealVLCIntegrationTests(unittest.TestCase):
         first_queue_id = first_queued["queue_id"]
         second_queue_id = second_queued["queue_id"]
 
-        # Recreate the controller as if the bot process had restarted while VLC
-        # continued running. The persisted soft queue must retain its order.
         restarted = VLCController(
             host="127.0.0.1",
             port=self.port,
@@ -321,23 +333,21 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.assertTrue(restored["success"], restored)
         self.assertEqual(restored["queued_item_ids"], [first_queue_id, second_queue_id])
 
-        # Remove the first queued media entry from VLC while the bot is offline.
-        restarted.send_command("pl_delete", {"id": second_id})
+        # The bot queue must survive VLC losing every playlist ID. VLC is only
+        # an execution target; queued URIs and order live in CtrlVee's backup.
+        restarted.send_command("pl_empty")
         self.wait_for(
             lambda: playlist
             if (playlist := restarted.get_playlist()) is not None
-            and all(item.get("id") != str(second_id) for item in playlist.findall(".//leaf"))
+            and not playlist.findall(".//leaf")
             else None,
-            "deleted VLC playlist item to disappear",
+            "VLC execution playlist to clear",
         )
-
         reconciled = restarted.reconcile_queue_with_playlist()
         self.assertTrue(reconciled["success"], reconciled)
-        self.assertEqual(reconciled["removed_queue_ids"], [first_queue_id])
-        self.assertEqual(reconciled["queued_item_ids"], [second_queue_id])
-        self.assertEqual(restarted._queued_items[second_queue_id]["queue_order"], 1)
+        self.assertEqual(reconciled["removed_queue_ids"], [])
+        self.assertEqual(reconciled["queued_item_ids"], [first_queue_id, second_queue_id])
 
-        # A second controller restart must read the pruned, compacted backup.
         final_controller = VLCController(
             host="127.0.0.1",
             port=self.port,
@@ -346,7 +356,13 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         final_result = final_controller.reconcile_queue_with_playlist()
         self.assertTrue(final_result["success"], final_result)
-        self.assertEqual(final_result["queued_item_ids"], [second_queue_id])
+        self.assertEqual(final_result["queued_item_ids"], [first_queue_id, second_queue_id])
+        self.assertEqual(final_controller._queued_items[first_queue_id]["media_uri"], self.media_paths[1].as_uri())
+
+        played = final_controller.play_next_queued_item()
+        self.assertTrue(played["success"], played)
+        self.wait_for_current_uri(self.media_paths[1].as_uri())
+        self.assertEqual(len(final_controller.get_playlist().findall(".//leaf")), 1)
 
     def test_real_vlc_playback_recovers_after_stop(self):
         first_id, second_id, _ = self.load_playlist()

@@ -947,7 +947,6 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             select._values = [action]
             await select.callback(interaction)
             view._dispatch.assert_awaited_once_with(interaction, command)
-
     async def test_management_menu_routes_queue_tools_to_existing_handlers(self):
         view = PlaybackControlView(Mock())
         interaction = SimpleNamespace(
@@ -1036,6 +1035,261 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(view.next_button.disabled)
         self.assertTrue(view.remove_selected_button.disabled)
         interaction.response.edit_message.assert_awaited_once()
+
+
+    async def test_playback_panel_lifecycle_persists_restores_and_refreshes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = f"{directory}/playback_panels.json"
+            channel = SimpleNamespace(id=321)
+            original_message = SimpleNamespace(id=654, channel=channel)
+            writer = PlaybackCommands.__new__(PlaybackCommands)
+            writer.logger = Mock()
+            writer._playback_panel_messages = {654: original_message}
+
+            with patch.object(Config, "PLAYBACK_PANEL_REGISTRY_PATH", registry_path):
+                writer._save_playback_panel_registry()
+
+                panel_embed = discord.Embed(title="Video Playback")
+                panel_embed.set_footer(
+                    text="Video playback controls and queue overview. Playback actions are restricted to permitted roles."
+                )
+                restored_message = SimpleNamespace(
+                    id=654,
+                    channel=channel,
+                    author=SimpleNamespace(id=999),
+                    embeds=[panel_embed],
+                    edit=AsyncMock(),
+                )
+                channel.fetch_message = AsyncMock(return_value=restored_message)
+                bot = SimpleNamespace(
+                    user=SimpleNamespace(id=999),
+                    get_channel=Mock(return_value=channel),
+                    fetch_channel=AsyncMock(),
+                )
+                reader = PlaybackCommands.__new__(PlaybackCommands)
+                reader.bot = bot
+                reader.logger = Mock()
+                reader._playback_panel_messages = {}
+                reader._playback_panel_registry_restored = False
+                reader._playback_panel_embed = AsyncMock(
+                    return_value=discord.Embed(title="Restored panel")
+                )
+
+                await reader._restore_playback_panel_registry()
+                await reader._refresh_playback_panels()
+
+                self.assertTrue(reader._playback_panel_registry_restored)
+                self.assertIs(reader._playback_panel_messages[654], restored_message)
+                restored_message.edit.assert_awaited_once()
+                self.assertEqual(
+                    restored_message.edit.await_args.kwargs["embed"].title,
+                    "Restored panel",
+                )
+                self.assertIsInstance(
+                    restored_message.edit.await_args.kwargs["view"],
+                    PlaybackControlView,
+                )
+
+    async def test_registry_retries_transient_discord_errors_on_next_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = f"{directory}/playback_panels.json"
+            with open(registry_path, "w", encoding="utf-8") as registry_file:
+                json.dump([{"channel_id": 321, "message_id": 654}], registry_file)
+
+            channel = SimpleNamespace(id=321)
+            panel_embed = discord.Embed(title="Video Playback")
+            panel_embed.set_footer(
+                text="Video playback controls and queue overview. Playback actions are restricted to permitted roles."
+            )
+            restored_message = SimpleNamespace(
+                id=654,
+                channel=channel,
+                author=SimpleNamespace(id=999),
+                embeds=[panel_embed],
+                edit=AsyncMock(),
+            )
+            transient_error = discord.HTTPException(
+                SimpleNamespace(status=503, reason="temporarily unavailable"),
+                "temporary failure",
+            )
+            channel.fetch_message = AsyncMock(
+                side_effect=[transient_error, restored_message]
+            )
+            bot = SimpleNamespace(
+                user=SimpleNamespace(id=999),
+                get_channel=Mock(return_value=channel),
+                fetch_channel=AsyncMock(),
+            )
+            cog = PlaybackCommands.__new__(PlaybackCommands)
+            cog.bot = bot
+            cog.logger = Mock()
+            cog._playback_panel_messages = {}
+            cog._playback_panel_registry_restored = False
+
+            with patch.object(Config, "PLAYBACK_PANEL_REGISTRY_PATH", registry_path):
+                await cog._restore_playback_panel_registry()
+                self.assertFalse(cog._playback_panel_registry_restored)
+                self.assertNotIn(654, cog._playback_panel_messages)
+
+                await cog._restore_playback_panel_registry()
+
+            self.assertTrue(cog._playback_panel_registry_restored)
+            self.assertIs(cog._playback_panel_messages[654], restored_message)
+            self.assertEqual(channel.fetch_message.await_count, 2)
+
+    async def test_registry_discards_deleted_or_non_panel_messages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = f"{directory}/playback_panels.json"
+            with open(registry_path, "w", encoding="utf-8") as registry_file:
+                json.dump(
+                    [
+                        {"channel_id": 321, "message_id": 654},
+                        {"channel_id": 321, "message_id": 655},
+                    ],
+                    registry_file,
+                )
+
+            channel = SimpleNamespace(id=321)
+            not_found = discord.NotFound(
+                SimpleNamespace(status=404, reason="not found"),
+                "deleted",
+            )
+            ordinary_message = SimpleNamespace(
+                id=655,
+                author=SimpleNamespace(id=999),
+                embeds=[discord.Embed(title="Not a playback panel")],
+            )
+            channel.fetch_message = AsyncMock(side_effect=[not_found, ordinary_message])
+            bot = SimpleNamespace(
+                user=SimpleNamespace(id=999),
+                get_channel=Mock(return_value=channel),
+                fetch_channel=AsyncMock(),
+            )
+            cog = PlaybackCommands.__new__(PlaybackCommands)
+            cog.bot = bot
+            cog.logger = Mock()
+            cog._playback_panel_messages = {}
+            cog._playback_panel_registry_restored = False
+
+            with patch.object(Config, "PLAYBACK_PANEL_REGISTRY_PATH", registry_path):
+                await cog._restore_playback_panel_registry()
+                with open(registry_path, "r", encoding="utf-8") as registry_file:
+                    self.assertEqual(json.load(registry_file), [])
+
+            self.assertTrue(cog._playback_panel_registry_restored)
+            self.assertEqual(cog._playback_panel_messages, {})
+
+    async def test_refresh_removes_missing_panel_without_blocking_other_panels(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog.logger = Mock()
+        deleted_message = SimpleNamespace(
+            id=1,
+            edit=AsyncMock(side_effect=discord.NotFound(
+                SimpleNamespace(status=404, reason="not found"), "deleted"
+            )),
+        )
+        healthy_message = SimpleNamespace(id=2, edit=AsyncMock())
+        cog._playback_panel_messages = {1: deleted_message, 2: healthy_message}
+        cog._playback_panel_embed = AsyncMock(return_value=discord.Embed(title="Current"))
+        cog._save_playback_panel_registry = Mock()
+
+        await PlaybackCommands._refresh_playback_panels(cog)
+
+        self.assertNotIn(1, cog._playback_panel_messages)
+        self.assertIn(2, cog._playback_panel_messages)
+        healthy_message.edit.assert_awaited_once()
+        cog._save_playback_panel_registry.assert_called_once_with()
+
+    async def test_primary_panel_buttons_dispatch_existing_commands(self):
+        view = PlaybackControlView(Mock())
+        view._dispatch = AsyncMock()
+        interaction = Mock()
+        buttons = {
+            button.label: button
+            for button in view.children
+            if isinstance(button, discord.ui.Button)
+        }
+
+        for label, command, args in (
+            ("Previous", "previous_track", ()),
+            ("Play", "play", ()),
+            ("Pause", "pause", ()),
+            ("Stop", "stop", ()),
+            ("Next", "next_track", ()),
+            ("Rewind 10s", "rewind", (10,)),
+            ("Forward 10s", "forward", (10,)),
+            ("Rewind 30s", "rewind", (30,)),
+            ("Forward 30s", "forward", (30,)),
+        ):
+            view._dispatch.reset_mock()
+            await buttons[label].callback(interaction)
+            view._dispatch.assert_awaited_once_with(interaction, command, *args)
+
+    async def test_unauthorized_panel_interaction_never_dispatches_playback(self):
+        view = PlaybackControlView(Mock())
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(roles=[SimpleNamespace(id=10, name="Viewer")]),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        view._dispatch = AsyncMock()
+
+        with patch.object(Config, "ALLOWED_ROLES", ["DJ"]):
+            allowed = await view.interaction_check(interaction)
+
+        self.assertFalse(allowed)
+        view._dispatch.assert_not_awaited()
+        interaction.response.send_message.assert_awaited_once_with(
+            "You don't have a role permitted to control playback.",
+            ephemeral=True,
+        )
+
+    async def test_registry_ignores_malformed_entries_and_uses_channel_fetch_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = f"{directory}/playback_panels.json"
+            with open(registry_path, "w", encoding="utf-8") as registry_file:
+                json.dump(
+                    [
+                        {"channel_id": 321},
+                        {"channel_id": "not-an-id", "message_id": 700},
+                        {"channel_id": 321, "message_id": 654},
+                    ],
+                    registry_file,
+                )
+
+            channel = SimpleNamespace(id=321)
+            panel_embed = discord.Embed(title="Video Playback")
+            panel_embed.set_footer(
+                text="Video playback controls and queue overview. Playback actions are restricted to permitted roles."
+            )
+            message = SimpleNamespace(
+                id=654,
+                channel=channel,
+                author=SimpleNamespace(id=999),
+                embeds=[panel_embed],
+            )
+            channel.fetch_message = AsyncMock(return_value=message)
+            bot = SimpleNamespace(
+                user=SimpleNamespace(id=999),
+                get_channel=Mock(return_value=None),
+                fetch_channel=AsyncMock(return_value=channel),
+            )
+            cog = PlaybackCommands.__new__(PlaybackCommands)
+            cog.bot = bot
+            cog.logger = Mock()
+            cog._playback_panel_messages = {}
+            cog._playback_panel_registry_restored = False
+
+            with patch.object(Config, "PLAYBACK_PANEL_REGISTRY_PATH", registry_path):
+                await cog._restore_playback_panel_registry()
+                with open(registry_path, "r", encoding="utf-8") as registry_file:
+                    self.assertEqual(json.load(registry_file), [
+                        {"channel_id": 321, "message_id": 654}
+                    ])
+
+            bot.fetch_channel.assert_awaited_once_with(321)
+            channel.fetch_message.assert_awaited_once_with(654)
+            self.assertIs(cog._playback_panel_messages[654], message)
+            self.assertTrue(cog._playback_panel_registry_restored)
 
 
 if __name__ == "__main__":
