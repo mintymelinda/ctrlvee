@@ -175,6 +175,8 @@ class Config:
     # Optional: periodically save current VLC playlist to a file (relative to bot dir if not absolute)
     PLAYLIST_AUTOSAVE_FILE: str = os.getenv('PLAYLIST_AUTOSAVE_FILE', '').strip()
     PLAYLIST_AUTOSAVE_INTERVAL: int = int(os.getenv('PLAYLIST_AUTOSAVE_INTERVAL', '300'))
+    # Persist Discord playback panel message references across bot restarts.
+    PLAYBACK_PANEL_REGISTRY_PATH: str = os.getenv('PLAYBACK_PANEL_REGISTRY_PATH', 'data/playback_panels.json').strip()
     
     # Playlist Settings
     ITEMS_PER_PAGE: int = int(os.getenv('ITEMS_PER_PAGE', '20'))
