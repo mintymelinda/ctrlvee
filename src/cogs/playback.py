@@ -1922,9 +1922,6 @@ class PlaybackCommands(commands.Cog):
             except Exception:
                 pass
 
-            if not final_embed.thumbnail and hasattr(self.bot.user, 'display_avatar'):
-                final_embed.set_thumbnail(url=self.bot.user.display_avatar.url)
-
             return final_embed
 
         except Exception as e:
@@ -1933,56 +1930,50 @@ class PlaybackCommands(commands.Cog):
             
 
     async def _playback_panel_embed(self) -> discord.Embed:
-        """Build a fresh status embed for the interactive playback panel."""
-        embed = discord.Embed(title="VLC Playback Controls", color=discord.Color.blue())
+        """Build a video-first Now Playing embed for the interactive playback panel."""
+        embed = await self.get_status_embed()
+        if embed is None:
+            embed = discord.Embed(
+                title="Video Playback",
+                description="VLC status is currently unavailable.",
+                color=discord.Color.blue(),
+            )
+        elif embed.title == "VLC Status":
+            embed.title = "Video Playback"
+
         try:
-            status, playlist = await self.vlc.run_async("get_playback_snapshot")
-            state_element = status.find("state") if status is not None else None
-            state = state_element.text if state_element is not None else "unavailable"
-            current_item = None
-            if playlist is not None:
-                current_item = next(
-                    (item for item in playlist.findall(".//leaf") if item.get("current")),
-                    None,
-                )
-            embed.add_field(name="State", value=str(state).capitalize(), inline=True)
+            queue_status, queue_playlist = await self.vlc.run_async("get_queue_snapshot")
+            queued_items = queue_status.get("queued_items", {})
             embed.add_field(
-                name="Now Playing",
-                value=(current_item.get("name") if current_item is not None else "Nothing"),
+                name="Shuffle",
+                value="Enabled" if queue_status.get("shuffle_currently_on") else "Disabled",
+                inline=True,
+            )
+            playlist_names = {
+                item.get("id"): item.get("name", "Unknown")
+                for item in (queue_playlist.findall(".//leaf") if queue_playlist is not None else [])
+            }
+            ordered_queue = sorted(
+                queued_items.items(),
+                key=lambda entry: entry[1].get("queue_order", 0),
+            )
+            queue_lines = []
+            for item_id, info in ordered_queue[:3]:
+                item_name = playlist_names.get(item_id) or info.get("item_name", "Unknown")
+                queue_lines.append(f"**#{info.get('queue_order', '?')}** {item_name}")
+            if len(ordered_queue) > 3:
+                queue_lines.append(f"…and {len(ordered_queue) - 3} more")
+            embed.add_field(
+                name=f"Soft Queue ({len(ordered_queue)})",
+                value="\n".join(queue_lines) if queue_lines else "No queued items",
                 inline=False,
             )
-            try:
-                queue_status, queue_playlist = await self.vlc.run_async("get_queue_snapshot")
-                queued_items = queue_status.get("queued_items", {})
-                embed.add_field(
-                    name="Shuffle",
-                    value="Enabled" if queue_status.get("shuffle_currently_on") else "Disabled",
-                    inline=True,
-                )
-                playlist_names = {
-                    item.get("id"): item.get("name", "Unknown")
-                    for item in (queue_playlist.findall(".//leaf") if queue_playlist is not None else [])
-                }
-                ordered_queue = sorted(
-                    queued_items.items(),
-                    key=lambda entry: entry[1].get("queue_order", 0),
-                )
-                queue_lines = []
-                for item_id, info in ordered_queue[:3]:
-                    item_name = playlist_names.get(item_id) or info.get("item_name", "Unknown")
-                    queue_lines.append(f"**#{info.get('queue_order', '?')}** {item_name}")
-                if len(ordered_queue) > 3:
-                    queue_lines.append(f"…and {len(ordered_queue) - 3} more")
-                embed.add_field(
-                    name=f"Soft Queue ({len(ordered_queue)})",
-                    value="\n".join(queue_lines) if queue_lines else "No queued items",
-                    inline=False,
-                )
-            except Exception:
-                embed.add_field(name="Queue / Shuffle", value="Currently unavailable", inline=False)
         except Exception:
-            embed.description = "VLC status is currently unavailable."
-        embed.set_footer(text="Playback, queue, and shuffle controls. Queue details are private to the button user.")
+            embed.add_field(name="Queue / Shuffle", value="Currently unavailable", inline=False)
+
+        embed.set_footer(
+            text="Video playback controls and queue overview. Playback actions are restricted to permitted roles."
+        )
         return embed
 
     @commands.command(name="panel", aliases=["playback_panel"])
