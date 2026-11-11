@@ -276,6 +276,36 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             "Playlist item #3",
         ])
 
+    async def test_queue_by_stable_id_checks_voice_guard_and_uses_serialized_controller(self):
+        cog = SimpleNamespace(
+            _playback_guard=AsyncMock(return_value=(True, "")),
+            vlc=SimpleNamespace(run_async=AsyncMock(return_value={
+                "success": True, "item_name": "Selected", "queue_order": 2,
+            })),
+        )
+        context = SimpleNamespace(author=Mock(), send=AsyncMock())
+
+        await PlaybackCommands.queue_playlist_item_by_id(cog, context, "vlc-42")
+
+        cog._playback_guard.assert_awaited_once_with(context.author)
+        cog.vlc.run_async.assert_awaited_once_with("queue_playlist_item_by_id", "vlc-42")
+        context.send.assert_awaited_once_with("Queued **Selected** as queue item **#2**.")
+
+    async def test_queue_by_stable_id_reports_removed_playlist_item(self):
+        cog = SimpleNamespace(
+            _playback_guard=AsyncMock(return_value=(True, "")),
+            vlc=SimpleNamespace(run_async=AsyncMock(return_value={
+                "success": False, "error": "item_not_found",
+            })),
+        )
+        context = SimpleNamespace(author=Mock(), send=AsyncMock())
+
+        await PlaybackCommands.queue_playlist_item_by_id(cog, context, "removed")
+
+        context.send.assert_awaited_once_with(
+            "That playlist item is no longer available. Reopen Add to Queue and choose it again.",
+        )
+
     async def test_queue_picker_dispatches_stable_item_id(self):
         view = PlaybackControlView(Mock())
         view._dispatch = AsyncMock()
