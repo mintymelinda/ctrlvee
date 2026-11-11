@@ -3055,6 +3055,168 @@ class QueuePlaylistSelect(discord.ui.Select):
         )
 
 
+class QueueManageSelect(discord.ui.Select):
+    """Select a soft-queue entry for removal or reordering."""
+
+    def __init__(self, queue_view, queue_status, playlist):
+        self.queue_view = queue_view
+        queued_items = queue_status.get("queued_items", {})
+        playlist_names = {
+            item.get("id"): item.get("name", "Unknown")
+            for item in (playlist.findall(".//leaf") if playlist is not None else [])
+        }
+        ordered_items = sorted(
+            queued_items.items(),
+            key=lambda entry: entry[1].get("queue_order", 0),
+        )
+        options = [
+            discord.SelectOption(
+                label=f"#{info.get('queue_order', '?')} - "
+                f"{(playlist_names.get(item_id) or info.get('item_name') or 'Unknown')[:85]}",
+                value=str(info.get("queue_order", position)),
+                description=f"Queue position {info.get('queue_order', position)}",
+            )
+            for position, (item_id, info) in enumerate(ordered_items[:25], 1)
+        ]
+        super().__init__(
+            placeholder="Choose a queued track to manage",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.queue_view.selected_queue_order = int(self.values[0])
+        selected_order = self.queue_view.selected_queue_order
+        self.queue_view.remove_selected_button.disabled = False
+        self.queue_view.move_earlier_button.disabled = selected_order <= 1
+        self.queue_view.move_later_button.disabled = (
+            selected_order >= self.queue_view.total_items
+        )
+        await interaction.response.edit_message(
+            content=(
+                f"Selected queue item **#{selected_order}**. "
+                "Remove it or move it one position earlier or later."
+            ),
+            view=self.queue_view,
+        )
+
+
+class QueueManageView(discord.ui.View):
+    """Private queue manager using the controller's serialized queue operations."""
+
+    def __init__(self, cog: PlaybackCommands, queue_status, playlist):
+        super().__init__(timeout=120)
+        self.cog = cog
+        self.selected_queue_order = None
+        self.total_items = len(queue_status.get("queued_items", {}))
+        self.add_item(QueueManageSelect(self, queue_status, playlist))
+        self.remove_selected_button.disabled = True
+        self.move_earlier_button.disabled = True
+        self.move_later_button.disabled = True
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def _apply_queue_change(self, interaction: discord.Interaction, operation: str):
+        if self.selected_queue_order is None:
+            await interaction.response.send_message(
+                "Choose a queued track first.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            if operation == "remove":
+                result = await self.cog.vlc.run_async(
+                    "remove_from_queue_by_order",
+                    self.selected_queue_order,
+                )
+            else:
+                result = await self.cog.vlc.run_async(
+                    "move_queue_item_by_order",
+                    self.selected_queue_order,
+                    operation,
+                )
+
+            if not result.get("success"):
+                message = result.get("error", "The queue could not be updated.")
+            elif operation == "remove":
+                message = f"Removed **{result.get('item_name', 'Unknown')}** from the queue."
+            else:
+                message = (
+                    f"Moved **{result.get('item_name', 'Unknown')}** "
+                    f"to queue position #{result.get('queue_order')}."
+                )
+
+            queue_status, playlist = await self.cog.vlc.run_async("get_queue_snapshot")
+            if not queue_status.get("queued_items"):
+                await interaction.message.edit(
+                    content=f"{message}\nThe soft queue is now empty.",
+                    view=None,
+                )
+                return
+
+            await interaction.message.edit(
+                content=f"{message}\nSelect another queued track to manage.",
+                view=QueueManageView(self.cog, queue_status, playlist),
+            )
+        except Exception:
+            self.cog.logger.exception("Could not update the soft queue from the playback panel")
+            await interaction.message.edit(
+                content="The queue could not be updated. Please try again.",
+                view=self,
+            )
+
+    @discord.ui.button(
+        label="Remove",
+        emoji="🗑️",
+        style=discord.ButtonStyle.danger,
+        row=1,
+        disabled=True,
+    )
+    async def remove_selected_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self._apply_queue_change(interaction, "remove")
+
+    @discord.ui.button(
+        label="Move Earlier",
+        emoji="⬆️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        disabled=True,
+    )
+    async def move_earlier_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self._apply_queue_change(interaction, "up")
+
+    @discord.ui.button(
+        label="Move Later",
+        emoji="⬇️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        disabled=True,
+    )
+    async def move_later_button(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await self._apply_queue_change(interaction, "down")
+
+
 class PlaybackControlView(discord.ui.View):
     """Short-lived interactive panel that delegates to existing guarded commands."""
 
@@ -3142,6 +3304,37 @@ class PlaybackControlView(discord.ui.View):
     @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "queue_status")
+
+    @discord.ui.button(label="Manage Queue", emoji="🛠️", style=discord.ButtonStyle.primary, row=2)
+    async def manage_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            queue_status, playlist = await self.cog.vlc.run_async("get_queue_snapshot")
+            if not queue_status.get("queued_items"):
+                await interaction.followup.send(
+                    "There are no queued tracks to manage.",
+                    ephemeral=True,
+                )
+                return
+
+            ordered_items = sorted(
+                queue_status["queued_items"].items(),
+                key=lambda entry: entry[1].get("queue_order", 0),
+            )
+            message = "Select a queued track to remove or move earlier/later."
+            if len(ordered_items) > 25:
+                message += " Showing the first 25 entries."
+            await interaction.followup.send(
+                message,
+                view=QueueManageView(self.cog, queue_status, playlist),
+                ephemeral=True,
+            )
+        except Exception:
+            self.cog.logger.exception("Could not open the queue manager")
+            await interaction.followup.send(
+                "The soft queue is currently unavailable.",
+                ephemeral=True,
+            )
 
     @discord.ui.button(label="Add to Queue", emoji="➕", style=discord.ButtonStyle.success, row=2)
     async def add_to_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
