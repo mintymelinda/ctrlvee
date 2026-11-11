@@ -465,7 +465,9 @@ class VLCControllerTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["ambiguous_queue_ids"], ["queue-entry"])
         self.assertIn("queue-entry", self.controller._queued_items)
-        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "old-vlc-id")
+        self.assertIsNone(self.controller._queued_items["queue-entry"]["playlist_item_id"])
+        self.assertEqual(self.controller._queued_items["queue-entry"]["stale_playlist_item_id"], "old-vlc-id")
+        self.assertIsNone(self.controller.get_next_queued_item()["playlist_item_id"])
 
     def test_queue_backup_round_trip_preserves_independent_queue_identity(self):
         self.controller._queued_items = {
