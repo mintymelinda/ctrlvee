@@ -322,23 +322,23 @@ class VLCControllerTests(unittest.TestCase):
 
     def test_monitor_queue_play_revalidates_state_and_current_item_before_playing(self):
         self.controller._queued_items = {
-            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": False}
+            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": False,
+                       "media_uri": "file:///media/queued.mkv", "playlist_item_id": "source"}
         }
         status = ET.fromstring("<root><state>playing</state></root>")
         playlist = ET.fromstring('<playlist><leaf id="current" current="current"/></playlist>')
         with patch.object(self.controller, "get_status", return_value=status), patch.object(
             self.controller, "get_playlist", return_value=playlist
-        ), patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+        ), patch.object(self.controller, "play_media_uri", return_value="exec-queued") as play, patch.object(
             self.controller, "get_shuffle_state", return_value=False
         ):
             result = self.controller.play_queued_item_if_monitor_state(
                 "playing", expected_current_item_id="current"
             )
-
         self.assertTrue(result["success"])
         self.assertTrue(result["attempted"])
         self.assertEqual(result["reason"], "played")
-        play.assert_called_once_with("queued")
+        play.assert_called_once_with("file:///media/queued.mkv", "Queued")
 
     def test_monitor_queue_play_ignores_stale_state_observation(self):
         status = ET.fromstring("<root><state>paused</state></root>")
@@ -383,31 +383,26 @@ class VLCControllerTests(unittest.TestCase):
 
     def test_monitor_queue_play_starts_queued_item_when_paused_at_end(self):
         self.controller._queued_items = {
-            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": False}
+            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": False,
+                       "media_uri": "file:///media/queued.mkv", "playlist_item_id": "source"}
         }
         status = ET.fromstring(
             "<root><state>paused</state><time>118</time><length>120</length></root>"
         )
         with patch.object(self.controller, "get_status", return_value=status), patch.object(
-            self.controller, "play_item_by_id", return_value=True
+            self.controller, "play_media_uri", return_value="exec-queued"
         ) as play, patch.object(self.controller, "get_shuffle_state", return_value=False):
-            result = self.controller.play_queued_item_if_monitor_state(
-                "paused", require_end=True
-            )
-
+            result = self.controller.play_queued_item_if_monitor_state("paused", require_end=True)
         self.assertTrue(result["success"])
         self.assertTrue(result["attempted"])
-        play.assert_called_once_with("queued")
+        play.assert_called_once_with("file:///media/queued.mkv", "Queued")
 
-    def test_reconciliation_rebinds_queue_entry_when_vlc_regenerates_playlist_id(self):
+    def test_reconciliation_preserves_uri_identity_when_vlc_regenerates_playlist_id(self):
         self.controller._queued_items = {
             "queue-entry": {
-                "queue_id": "queue-entry",
-                "playlist_item_id": "old-vlc-id",
-                "item_id": "old-vlc-id",
-                "media_uri": "file:///media/movie.mkv",
-                "item_name": "Movie",
-                "queue_order": 1,
+                "queue_id": "queue-entry", "playlist_item_id": "old-vlc-id",
+                "item_id": "old-vlc-id", "media_uri": "file:///media/movie.mkv",
+                "item_name": "Movie", "queue_order": 1,
             }
         }
         playlist = ET.fromstring(
@@ -415,23 +410,18 @@ class VLCControllerTests(unittest.TestCase):
         )
         with patch.object(self.controller, "get_playlist", return_value=playlist):
             result = self.controller.reconcile_queue_with_playlist()
-
         self.assertTrue(result["success"])
-        self.assertEqual(result["rebound_queue_ids"], ["queue-entry"])
+        self.assertEqual(result["migrated_queue_ids"], [])
         self.assertEqual(result["queued_item_ids"], ["queue-entry"])
-        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "new-vlc-id")
-        self.assertEqual(self.controller.get_next_queued_item()["queue_id"], "queue-entry")
-        self.assertEqual(self.controller.get_next_queued_item()["item_id"], "new-vlc-id")
+        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "old-vlc-id")
+        self.assertEqual(self.controller.get_next_queued_item()["media_uri"], "file:///media/movie.mkv")
 
-    def test_reconciliation_does_not_trust_recycled_vlc_id_with_different_uri(self):
+    def test_reconciliation_does_not_rebind_durable_uri_to_recycled_vlc_id(self):
         self.controller._queued_items = {
             "queue-entry": {
-                "queue_id": "queue-entry",
-                "playlist_item_id": "reused-vlc-id",
-                "item_id": "reused-vlc-id",
-                "media_uri": "file:///media/original.mkv",
-                "item_name": "Original",
-                "queue_order": 1,
+                "queue_id": "queue-entry", "playlist_item_id": "reused-vlc-id",
+                "item_id": "reused-vlc-id", "media_uri": "file:///media/original.mkv",
+                "item_name": "Original", "queue_order": 1,
             }
         }
         playlist = ET.fromstring(
@@ -440,19 +430,15 @@ class VLCControllerTests(unittest.TestCase):
         )
         with patch.object(self.controller, "get_playlist", return_value=playlist):
             result = self.controller.reconcile_queue_with_playlist()
-
         self.assertTrue(result["success"])
-        self.assertEqual(result["rebound_queue_ids"], ["queue-entry"])
-        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "new-vlc-id")
+        self.assertEqual(result["migrated_queue_ids"], [])
+        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "reused-vlc-id")
 
-    def test_reconciliation_keeps_entry_when_media_uri_matches_multiple_vlc_items(self):
+    def test_reconciliation_does_not_depend_on_ambiguous_vlc_playlist_matches(self):
         self.controller._queued_items = {
             "queue-entry": {
-                "queue_id": "queue-entry",
-                "playlist_item_id": "old-vlc-id",
-                "media_uri": "file:///media/movie.mkv",
-                "item_name": "Movie",
-                "queue_order": 1,
+                "queue_id": "queue-entry", "playlist_item_id": "old-vlc-id",
+                "media_uri": "file:///media/movie.mkv", "item_name": "Movie", "queue_order": 1,
             }
         }
         playlist = ET.fromstring(
@@ -461,13 +447,10 @@ class VLCControllerTests(unittest.TestCase):
         )
         with patch.object(self.controller, "get_playlist", return_value=playlist):
             result = self.controller.reconcile_queue_with_playlist()
-
         self.assertTrue(result["success"])
-        self.assertEqual(result["ambiguous_queue_ids"], ["queue-entry"])
-        self.assertIn("queue-entry", self.controller._queued_items)
-        self.assertIsNone(self.controller._queued_items["queue-entry"]["playlist_item_id"])
-        self.assertEqual(self.controller._queued_items["queue-entry"]["stale_playlist_item_id"], "old-vlc-id")
-        self.assertIsNone(self.controller.get_next_queued_item()["playlist_item_id"])
+        self.assertEqual(result["ambiguous_queue_ids"], [])
+        self.assertEqual(result["queued_item_ids"], ["queue-entry"])
+        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "old-vlc-id")
 
     def test_queue_backup_round_trip_preserves_independent_queue_identity(self):
         self.controller._queued_items = {
@@ -506,20 +489,19 @@ class VLCControllerTests(unittest.TestCase):
 
     def test_queue_backup_reconciles_and_preserves_order_after_restart(self):
         self.controller._queued_items = {
-            "queue-17": {"queue_id": "queue-17", "playlist_item_id": "17", "item_id": "17", "item_name": "Episode 1", "queue_order": 2, "restore_shuffle": False},
-            "queue-23": {"queue_id": "queue-23", "playlist_item_id": "23", "item_id": "23", "item_name": "Episode 2", "queue_order": 1, "restore_shuffle": True},
+            "queue-17": {"queue_id": "queue-17", "playlist_item_id": "17", "item_id": "17",
+                         "media_uri": "file:///media/one.mkv", "item_name": "Episode 1",
+                         "queue_order": 2, "restore_shuffle": False},
+            "queue-23": {"queue_id": "queue-23", "playlist_item_id": "23", "item_id": "23",
+                         "media_uri": "file:///media/two.mkv", "item_name": "Episode 2",
+                         "queue_order": 1, "restore_shuffle": True},
         }
         self.controller._shuffle_restore_queue = ["queue-23"]
         self.controller._save_queue_backup()
-
         restored = VLCController(queue_backup_file=str(self.backup_path))
-        playlist = ET.fromstring(
-            '<playlist><leaf id="17" name="Episode 1"/>'
-            '<leaf id="23" name="Episode 2"/></playlist>'
-        )
+        playlist = ET.fromstring("<playlist/>")
         with patch.object(restored, "get_playlist", return_value=playlist):
             result = restored.reconcile_queue_with_playlist()
-
         self.assertTrue(result["success"])
         self.assertEqual(result["removed_item_ids"], [])
         self.assertEqual(result["queued_item_ids"], ["queue-23", "queue-17"])
@@ -527,39 +509,31 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(restored._queued_items["queue-17"]["queue_order"], 2)
         self.assertEqual(restored._shuffle_restore_queue, ["queue-23"])
 
-    def test_queue_reconciliation_removes_missing_playlist_items_and_compacts_order(self):
+    def test_queue_reconciliation_prunes_legacy_entries_without_media_uri(self):
         self.controller._queued_items = {
-            "queue-missing": {"queue_id": "queue-missing", "playlist_item_id": "missing", "item_id": "missing", "item_name": "Removed", "queue_order": 1, "restore_shuffle": True},
-            "queue-present": {"queue_id": "queue-present", "playlist_item_id": "present", "item_id": "present", "item_name": "Kept", "queue_order": 2, "restore_shuffle": False},
+            "queue-missing": {"queue_id": "queue-missing", "playlist_item_id": "missing", "item_id": "missing",
+                              "item_name": "Removed", "queue_order": 1, "restore_shuffle": True},
+            "queue-present": {"queue_id": "queue-present", "playlist_item_id": "present", "item_id": "present",
+                              "media_uri": "file:///media/kept.mkv", "item_name": "Kept", "queue_order": 2,
+                              "restore_shuffle": False},
         }
         self.controller._shuffle_restore_queue = ["queue-missing"]
         playlist = ET.fromstring('<playlist><leaf id="present" name="Kept"/></playlist>')
-
         with patch.object(self.controller, "get_playlist", return_value=playlist):
             result = self.controller.reconcile_queue_with_playlist()
-
         self.assertTrue(result["success"])
         self.assertEqual(result["removed_queue_ids"], ["queue-missing"])
         self.assertEqual(result["queued_item_ids"], ["queue-present"])
         self.assertEqual(self.controller._queued_items["queue-present"]["queue_order"], 1)
         self.assertEqual(self.controller._shuffle_restore_queue, [])
 
-        restored = VLCController(queue_backup_file=str(self.backup_path))
-        self.assertEqual(list(restored._queued_items), ["queue-present"])
-        self.assertEqual(restored._shuffle_restore_queue, [])
-
-    def test_queue_reconciliation_retains_backup_when_playlist_is_unavailable(self):
+    def test_queue_reconciliation_retains_uri_backed_queue_when_vlc_is_unavailable(self):
         self.queue_item("queued")
-        original_queue = dict(self.controller._queued_items)
-        original_restore_queue = list(self.controller._shuffle_restore_queue)
-
+        original = dict(self.controller._queued_items)
         with patch.object(self.controller, "get_playlist", return_value=None):
             result = self.controller.reconcile_queue_with_playlist()
-
-        self.assertFalse(result["success"])
-        self.assertEqual(result["reason"], "playlist_unavailable")
-        self.assertEqual(self.controller._queued_items, original_queue)
-        self.assertEqual(self.controller._shuffle_restore_queue, original_restore_queue)
+        self.assertTrue(result["success"])
+        self.assertEqual(self.controller._queued_items, original)
 
     def test_empty_backup_loads_empty_queue_state(self):
         self.backup_path.write_text("", encoding="utf-8")
@@ -669,18 +643,13 @@ class VLCControllerTests(unittest.TestCase):
             "B": {"item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
         }
         self.controller._shuffle_restore_queue = ["A"]
-        before = ET.fromstring('<playlist><leaf id="A" name="Alpha"/><leaf id="B" name="Bravo"/></playlist>')
-        after = ET.fromstring('<playlist><leaf id="B" name="Bravo"/></playlist>')
-        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
-            self.controller, "delete_playlist_item", return_value=True
-        ) as delete:
+        with patch.object(self.controller, "delete_playlist_item") as delete:
             result = self.controller.remove_from_queue_by_id("A")
-
         self.assertTrue(result["success"])
         self.assertEqual(result["removed_item_id"], "A")
-        delete.assert_called_once_with("A")
+        delete.assert_not_called()
         self.assertEqual(self.controller._queued_items["B"]["queue_order"], 1)
-        self.assertEqual(self.controller._queued_items["B"]["restore_shuffle"], True)
+        self.assertTrue(self.controller._queued_items["B"]["restore_shuffle"])
         self.assertEqual(self.controller._shuffle_restore_queue, ["B"])
 
     def test_removing_final_shuffle_managed_item_restores_shuffle(self):
@@ -735,70 +704,37 @@ class VLCControllerTests(unittest.TestCase):
         delete.assert_not_called()
         self.assertNotIn("scheduled", self.controller._queued_items)
 
-    def test_remove_keeps_queue_record_when_vlc_is_unavailable(self):
-        self.controller._queued_items = {
-            "queued": {"item_name": "Queued", "queue_order": 1}
-        }
-        with patch.object(self.controller, "get_playlist", return_value=None):
+    def test_remove_from_queue_does_not_depend_on_vlc_availability(self):
+        self.controller._queued_items = {"queued": {"item_name": "Queued", "queue_order": 1}}
+        result = self.controller.remove_from_queue_by_id("queued")
+        self.assertTrue(result["success"])
+        self.assertNotIn("queued", self.controller._queued_items)
+
+    def test_remove_never_calls_unsupported_vlc_playlist_delete(self):
+        self.controller._queued_items = {"queued": {"item_name": "Queued", "queue_order": 1}}
+        with patch.object(self.controller, "delete_playlist_item") as delete:
             result = self.controller.remove_from_queue_by_id("queued")
+        self.assertTrue(result["success"])
+        delete.assert_not_called()
+        self.assertNotIn("queued", self.controller._queued_items)
 
-        self.assertFalse(result["success"])
-        self.assertEqual(result["error"], "playlist_unavailable")
-        self.assertIn("queued", self.controller._queued_items)
-
-    def test_remove_keeps_queue_record_when_playlist_delete_fails(self):
-        self.controller._queued_items = {
-            "queued": {"item_name": "Queued", "queue_order": 1}
-        }
-        playlist = ET.fromstring('<playlist><leaf id="queued" name="Queued"/></playlist>')
-        with patch.object(self.controller, "get_playlist", side_effect=[playlist, playlist]), patch.object(
-            self.controller, "delete_playlist_item", return_value=False
-        ):
-            result = self.controller.remove_from_queue_by_id("queued")
-
-        self.assertFalse(result["success"])
-        self.assertEqual(result["failed_item_ids"], ["queued"])
-        self.assertIn("queued", self.controller._queued_items)
-
-    def test_clear_queue_removes_queued_media_and_preserves_current_scheduled_and_unrelated(self):
+    def test_clear_queue_removes_only_bot_queue_records(self):
         self.controller._queued_items = {
             "queued": {"item_name": "Queued", "queue_order": 1},
             "scheduled": {"item_name": "Scheduled", "queue_order": 2},
         }
-        before = ET.fromstring(
-            '<playlist><leaf id="current" name="Current" current="current"/>'
-            '<leaf id="queued" name="Queued"/>'
-            '<leaf id="scheduled" name="Scheduled" uri="file:///media/scheduled.mkv"/>'
-            '<leaf id="unrelated" name="Unrelated"/></playlist>'
-        )
-        after = ET.fromstring(
-            '<playlist><leaf id="current" name="Current" current="current"/>'
-            '<leaf id="scheduled" name="Scheduled" uri="file:///media/scheduled.mkv"/>'
-            '<leaf id="unrelated" name="Unrelated"/></playlist>'
-        )
-        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
-            self.controller, "delete_playlist_item", return_value=True
-        ) as delete:
-            result = self.controller.clear_queue(
-                protected_uris={"file:///media/scheduled.mkv"}
-            )
-
+        with patch.object(self.controller, "delete_playlist_item") as delete:
+            result = self.controller.clear_queue(protected_uris={"file:///media/scheduled.mkv"})
         self.assertTrue(result["success"])
-        delete.assert_called_once_with("queued")
-        self.assertEqual(result["removed_item_ids"], ["queued", "scheduled"])
-        self.assertEqual(result["preserved_item_ids"], ["scheduled"])
+        delete.assert_not_called()
+        self.assertEqual(result["removed_queue_ids"], ["queued", "scheduled"])
         self.assertEqual(self.controller._queued_items, {})
 
-    def test_clear_queue_retains_tracking_when_vlc_is_unavailable(self):
-        self.controller._queued_items = {
-            "queued": {"item_name": "Queued", "queue_order": 1}
-        }
-        original_queue = dict(self.controller._queued_items)
-        with patch.object(self.controller, "get_playlist", return_value=None):
-            result = self.controller.clear_queue()
-
-        self.assertFalse(result["success"])
-        self.assertEqual(self.controller._queued_items, original_queue)
+    def test_clear_queue_does_not_depend_on_vlc_availability(self):
+        self.controller._queued_items = {"queued": {"item_name": "Queued", "queue_order": 1}}
+        result = self.controller.clear_queue()
+        self.assertTrue(result["success"])
+        self.assertEqual(self.controller._queued_items, {})
 
     def test_queue_management_by_id_rejects_stale_playlist_identity(self):
         self.controller._queued_items = {
@@ -875,34 +811,27 @@ class VLCControllerTests(unittest.TestCase):
     def test_transition_does_not_advance_twice_after_queued_item_starts(self):
         self.queue_item("A")
         self.queue_item("B")
-
-        with patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+        with patch.object(self.controller, "play_media_uri", return_value="A") as play, patch.object(
             self.controller, "get_shuffle_state", return_value=False
         ):
             self.controller.play_next_queued_item()
             self.controller.check_and_handle_queue_transition("A")
-
         self.assertEqual(play.call_count, 1)
-
 
     def test_pending_queue_item_is_retained_until_vlc_confirms_transition(self):
         self.queue_item("A")
         self.queue_item("B")
-
-        with patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+        with patch.object(self.controller, "play_media_uri", return_value="A") as play, patch.object(
             self.controller, "get_shuffle_state", return_value=False
         ):
             result = self.controller.play_next_queued_item()
-
         self.assertTrue(result["success"])
         self.assertIn("A", self.controller._queued_items)
         self.assertEqual(self.controller.get_next_queued_item()["item_id"], "A")
-        play.assert_called_once_with("A")
-
+        play.assert_called_once_with("file:///media/A.mkv", "A")
         stale_result = self.controller.check_and_handle_queue_transition("previous")
         self.assertEqual(stale_result["transitions"], [])
         self.assertEqual(play.call_count, 1)
-
         confirmed_result = self.controller.check_and_handle_queue_transition("A")
         self.assertEqual(
             [transition["action"] for transition in confirmed_result["transitions"]],
@@ -912,17 +841,15 @@ class VLCControllerTests(unittest.TestCase):
 
     def test_pending_queue_item_blocks_duplicate_play_commands(self):
         self.queue_item("A")
-
-        with patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+        with patch.object(self.controller, "play_media_uri", return_value="A") as play, patch.object(
             self.controller, "get_shuffle_state", return_value=False
         ):
             first = self.controller.play_next_queued_item()
             second = self.controller.play_next_queued_item()
-
         self.assertTrue(first["success"])
         self.assertFalse(second["success"])
         self.assertIn("already starting", second["error"])
-        play.assert_called_once_with("A")
+        play.assert_called_once_with("file:///media/A.mkv", "A")
 
     def test_play_next_or_advance_returns_queue_item_identity(self):
         queued = {"success": True, "item_id": "queued-7", "item_name": "Queued", "queue_order": 1}
