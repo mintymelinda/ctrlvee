@@ -3073,7 +3073,7 @@ class QueueManageSelect(discord.ui.Select):
             discord.SelectOption(
                 label=f"#{info.get('queue_order', '?')} - "
                 f"{(playlist_names.get(item_id) or info.get('item_name') or 'Unknown')[:85]}",
-                value=str(info.get("queue_order", position)),
+                value=str(item_id),
                 description=f"Queue position {info.get('queue_order', position)}",
             )
             for position, (item_id, info) in enumerate(ordered_items[:25], 1)
@@ -3086,8 +3086,8 @@ class QueueManageSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        self.queue_view.selected_queue_order = int(self.values[0])
-        selected_order = self.queue_view.selected_queue_order
+        self.queue_view.selected_queue_item_id = self.values[0]
+        selected_order = self.queue_view.queue_orders[self.values[0]]
         self.queue_view.remove_selected_button.disabled = False
         self.queue_view.move_earlier_button.disabled = selected_order <= 1
         self.queue_view.move_later_button.disabled = (
@@ -3108,8 +3108,19 @@ class QueueManageView(discord.ui.View):
     def __init__(self, cog: PlaybackCommands, queue_status, playlist):
         super().__init__(timeout=120)
         self.cog = cog
-        self.selected_queue_order = None
-        self.total_items = len(queue_status.get("queued_items", {}))
+        self.selected_queue_item_id = None
+        queued_items = queue_status.get("queued_items", {})
+        self.total_items = len(queued_items)
+        self.queue_orders = {
+            item_id: info.get("queue_order", position)
+            for position, (item_id, info) in enumerate(
+                sorted(
+                    queued_items.items(),
+                    key=lambda entry: entry[1].get("queue_order", 0),
+                ),
+                1,
+            )
+        }
         self.add_item(QueueManageSelect(self, queue_status, playlist))
         self.remove_selected_button.disabled = True
         self.move_earlier_button.disabled = True
@@ -3125,23 +3136,24 @@ class QueueManageView(discord.ui.View):
         return True
 
     async def _apply_queue_change(self, interaction: discord.Interaction, operation: str):
-        if self.selected_queue_order is None:
+        if self.selected_queue_item_id is None:
             await interaction.response.send_message(
                 "Choose a queued track first.",
                 ephemeral=True,
             )
             return
 
+        await interaction.response.defer()
         try:
             if operation == "remove":
                 result = await self.cog.vlc.run_async(
-                    "remove_from_queue_by_order",
-                    self.selected_queue_order,
+                    "remove_from_queue_by_id",
+                    self.selected_queue_item_id,
                 )
             else:
                 result = await self.cog.vlc.run_async(
-                    "move_queue_item_by_order",
-                    self.selected_queue_order,
+                    "move_queued_item_by_id",
+                    self.selected_queue_item_id,
                     operation,
                 )
 
