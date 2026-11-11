@@ -1939,7 +1939,7 @@ class VLCController:
             return {
                 "success": True,
                 "queue_id": queue_id,
-                "item_id": info.get("playlist_item_id", info.get("item_id")),
+                "item_id": info.get("playlist_item_id", info.get("item_id", queue_id)),
                 "item_name": info.get("item_name", "Unknown"),
                 "queue_order": info["queue_order"],
                 "swapped_with": neighbor_id,
