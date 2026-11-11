@@ -319,23 +319,30 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(next(option for option in speed_select.options if option.value == "1.0").default)
 
     async def test_advanced_selects_dispatch_existing_guarded_commands(self):
-        playback_view = PlaybackControlView(Mock())
-        playback_view._dispatch = AsyncMock()
-        audio = PlaybackAudioTrackSelect(playback_view, [{"index": 3, "name": "English"}])
-        audio._values = ["3"]
-        await audio.callback(Mock())
-        playback_view._dispatch.assert_awaited_once_with(
-            audio.view.playback_view if False else audio.callback.__self__.playback_view,
-            "audio_set",
-        ) if False else None
-        self.assertEqual(
-            playback_view._dispatch.await_args.args[1:],
-            ("audio_set", "3"),
+        cases = (
+            (PlaybackAudioTrackSelect, [{"index": 3, "name": "English"}], "3", "audio_set", ("3",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "2", "subtitle_set", ("2",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 2, "name": "French"}], "off", "subtitle_set", ("off",)),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__next__", "subtitle_next", ()),
+            (PlaybackSubtitleTrackSelect, [{"index": 1}, {"index": 2}], "__previous__", "subtitle_prev", ()),
+            (PlaybackSpeedSelect, [], "1.5", "speed", ("1.5",)),
         )
-        self.assertEqual(
-            playback_view._dispatch.await_args.kwargs,
-            {"refresh_panel": False},
-        )
+        for select_type, tracks, value, command, args in cases:
+            with self.subTest(command=command, value=value):
+                playback_view = PlaybackControlView(Mock())
+                playback_view._dispatch = AsyncMock()
+                select = (
+                    select_type(playback_view)
+                    if select_type is PlaybackSpeedSelect
+                    else select_type(playback_view, tracks)
+                )
+                select._values = [value]
+                await select.callback(Mock())
+                playback_view._dispatch.assert_awaited_once_with(
+                    command,
+                    *args,
+                    refresh_panel=False,
+                )
 
     async def test_advanced_menu_rejects_users_without_control_role(self):
         playback_view = PlaybackControlView(Mock())
