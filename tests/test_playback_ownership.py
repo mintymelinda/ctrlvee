@@ -4,10 +4,20 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, call, patch
 
 from src.config import Config
-from src.cogs.playback import PlaybackCommands, _decide_playback_allow
+from src.cogs.playback import PlaybackCommands, _decide_playback_allow, _member_has_allowed_role
 
 
 class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    def test_interaction_role_check_accepts_configured_role_name_or_id(self):
+        member = SimpleNamespace(roles=[
+            SimpleNamespace(id=42, name="DJ"),
+            SimpleNamespace(id=43, name="Moderator"),
+        ])
+        self.assertTrue(_member_has_allowed_role(member, ["DJ"]))
+        self.assertTrue(_member_has_allowed_role(member, [43]))
+        self.assertTrue(_member_has_allowed_role(member, ["42"]))
+        self.assertFalse(_member_has_allowed_role(member, ["Admin"]))
+
     def test_pure_guard_allows_when_no_room_is_configured(self):
         self.assertEqual(_decide_playback_allow(False, True, 1, None, False, False), (True, ""))
 
