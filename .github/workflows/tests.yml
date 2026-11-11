@@ -42,3 +42,20 @@ jobs:
 
       - name: Build CtrlVee image
         run: docker build --tag ctrlvee:ci .
+
+      - name: Validate Compose deployment configuration
+        run: |
+          cp template.env .env
+          docker compose config --quiet
+
+      - name: Smoke-test application imports in the built image
+        run: |
+          docker run --rm --entrypoint python ctrlvee:ci -c "
+          from src.config import Config
+          from src.services.vlc_controller import VLCController
+          from src.services.watch_folder_service import WatchFolderService
+          from src.cogs.playback import PlaybackCommands
+          from src.cogs.scheduler import Scheduler
+          from src.cogs.watch import WatchCommands
+          print('CtrlVee runtime imports OK')
+          "
