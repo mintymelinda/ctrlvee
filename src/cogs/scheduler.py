@@ -485,6 +485,47 @@ class Scheduler(commands.Cog):
                     logger.info("Recovered completed scheduled playback for '%s'", schedule.get("title"))
                     return "announcing"
 
+                # A different current item after the scheduled command was issued
+                # means another playback action superseded it. Do not retry later
+                # and unexpectedly interrupt that newer manual selection.
+                if "source_item_id" in schedule and claimed_item_id is not None:
+                    live_status, live_playlist = await self.vlc.run_async(
+                        "get_playback_snapshot"
+                    )
+                    live_item, _ = self.vlc._current_playlist_item(live_playlist)
+                    live_item_id = live_item.get("id") if live_item is not None else None
+                    source_item_id = schedule.get("source_item_id")
+                    if (
+                        live_status is not None
+                        and live_item_id is not None
+                        and str(live_item_id) != str(claimed_item_id)
+                        and (
+                            source_item_id is None
+                            or str(live_item_id) != str(source_item_id)
+                        )
+                    ):
+                        previous_schedules = self.scheduled
+                        self.scheduled = [
+                            entry for entry in previous_schedules if entry is not schedule
+                        ]
+                        if not self._save_schedule_backup():
+                            self.scheduled = previous_schedules
+                            logger.error(
+                                "Could not persist superseded scheduled playback for '%s'; "
+                                "keeping its execution claim",
+                                schedule.get("title", "Unknown"),
+                            )
+                            return "confirming"
+                        getattr(self, "_schedule_locks", {}).pop(id(schedule), None)
+                        logger.info(
+                            "Discarded scheduled playback for '%s': VLC moved from "
+                            "source item %s to newer item %s before the target was confirmed",
+                            schedule.get("title", "Unknown"),
+                            source_item_id,
+                            live_item_id,
+                        )
+                        return "superseded"
+
                 started_at = schedule.get("execution_started_at")
                 if started_at:
                     if isinstance(started_at, str):
@@ -537,13 +578,29 @@ class Scheduler(commands.Cog):
         # Keep the per-schedule lock in the caller, but release the global
         # schedule-list lock while the serialized controller operation runs.
         try:
-            result, confirmed = await self.vlc.run_async("play_item_and_confirm", item_id)
+            result, confirmed, source_item_id = await self.vlc.run_async(
+                "play_item_and_confirm", item_id
+            )
             succeeded = result is not None and result is not False
         except Exception as exc:
-            result, confirmed, succeeded = None, False, False
+            result, confirmed, source_item_id, succeeded = None, False, None, False
             error = exc
         else:
             error = "VLC rejected the playback command"
+
+        async with self._schedule_lock:
+            previous = schedule.copy()
+            schedule["source_item_id"] = (
+                str(source_item_id) if source_item_id is not None else None
+            )
+            if not self._save_schedule_backup():
+                schedule.clear()
+                schedule.update(previous)
+                logger.error(
+                    "Could not persist the source item for scheduled playback; "
+                    "retaining the execution claim"
+                )
+                return "confirming"
 
         if not succeeded:
             async with self._schedule_lock:
