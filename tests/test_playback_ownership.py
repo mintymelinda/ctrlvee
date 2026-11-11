@@ -241,19 +241,26 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         interaction.response.defer.assert_not_awaited()
         cog.vlc.run_async.assert_not_awaited()
 
-    def test_queue_picker_preserves_playlist_positions_and_limits_options(self):
+    def test_queue_picker_preserves_playlist_positions_across_pages(self):
         playlist = [
             ET.Element("leaf", {"name": f"Track {position}"})
             for position in range(1, 31)
         ]
-        view = PlaybackControlView(Mock())
-        picker = QueuePlaylistSelect(view, playlist)
+        picker_view = QueuePlaylistView(PlaybackControlView(Mock()), playlist)
+        picker = next(
+            child for child in picker_view.children
+            if isinstance(child, QueuePlaylistSelect)
+        )
 
         self.assertEqual(len(picker.options), 25)
         self.assertEqual(picker.options[0].label, "Track 1")
         self.assertEqual(picker.options[0].value, "1")
         self.assertEqual(picker.options[-1].label, "Track 25")
         self.assertEqual(picker.options[-1].value, "25")
+
+        picker_view.page = 1
+        next_page = QueuePlaylistSelect(picker_view)
+        self.assertEqual([option.value for option in next_page.options], ["26", "27", "28", "29", "30"])
 
     async def test_playback_panel_embed_summarizes_soft_queue_and_shuffle(self):
         cog = PlaybackCommands.__new__(PlaybackCommands)
