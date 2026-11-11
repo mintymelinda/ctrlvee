@@ -1,7 +1,7 @@
 import unittest
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from src.config import Config
 from src.cogs.playback import PlaybackCommands, _decide_playback_allow
@@ -174,6 +174,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         cog._set_presence = AsyncMock()
         cog._set_voice_channel_status = AsyncMock()
         cog._monitor_snapshot_is_current = AsyncMock(side_effect=[True, False])
+        cog.bot = SimpleNamespace(get_channel=Mock(), fetch_channel=AsyncMock())
         cog._np_cooldown = 10
         cog._last_now_playing_key = None
         cog._last_now_playing_ts = 0.0
@@ -197,8 +198,10 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         cog._set_presence.assert_awaited_once()
         cog._set_voice_channel_status.assert_awaited_once()
         cog._monitor_snapshot_is_current.assert_has_awaits(
-            [unittest.mock.call("1", "playing"), unittest.mock.call("1", "playing")]
+            [call("1", "playing"), call("1", "playing")]
         )
+        cog.bot.get_channel.assert_not_called()
+        cog.bot.fetch_channel.assert_not_awaited()
 
     async def test_unresolvable_configured_room_fails_closed(self):
         guild = SimpleNamespace(get_member=lambda _user_id: None)
