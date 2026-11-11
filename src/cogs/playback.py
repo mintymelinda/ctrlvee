@@ -2259,7 +2259,6 @@ class PlaybackCommands(commands.Cog):
         if decision.get("success"):
             logger.info("Loading previous track")
             await ctx.send('Loading previous track...')
-            self._command_initiated_change = True
             await self._confirm_navigation_target(
                 ctx,
                 decision.get("expected_item_id"),
