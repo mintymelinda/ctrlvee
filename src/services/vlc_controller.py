@@ -1349,6 +1349,13 @@ class VLCController:
             )
             if item is None:
                 return {"success": False, "error": "item_not_found"}
+            existing_queue_id = self._queue_id_for_playlist_item_id(playlist_item_id)
+            if existing_queue_id is not None:
+                return {
+                    "success": False,
+                    "error": "item_already_queued",
+                    "queue_id": existing_queue_id,
+                }
             shuffle_was_on = self.get_shuffle_state()
             if shuffle_was_on and not self._queued_items:
                 self.toggle_shuffle()
