@@ -159,6 +159,8 @@ class PlaybackCommands(commands.Cog):
             joined, join_result = await join_member_channel(member)
             if not joined:
                 return False, join_result
+            if not bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
+                return True, ""
             room = requester_channel
             requester_in_room = True
         else:
