@@ -65,6 +65,24 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["item"].get("name"), "Second")
         play.assert_called_once_with("2")
 
+    def test_play_item_and_confirm_captures_source_item_before_scheduled_selection(self):
+        source = ET.fromstring(
+            '<playlist><leaf id="source" current="current"/><leaf id="target"/></playlist>'
+        )
+        target = ET.fromstring(
+            '<playlist><leaf id="source"/><leaf id="target" current="current"/></playlist>'
+        )
+        with patch.object(
+            self.controller, "get_playlist", side_effect=[source, target]
+        ), patch.object(
+            self.controller, "play_item", return_value=ET.fromstring("<root><ok/></root>")
+        ) as play:
+            result, confirmed, source_item_id = self.controller.play_item_and_confirm("target")
+
+        self.assertTrue(confirmed)
+        self.assertEqual(source_item_id, "source")
+        play.assert_called_once_with("target")
+
     def test_play_item_and_capture_rejects_item_missing_from_live_playlist(self):
         playlist = ET.fromstring('<playlist><leaf id="newer" name="Newer"/></playlist>')
         with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
