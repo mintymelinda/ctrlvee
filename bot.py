@@ -738,7 +738,7 @@ async def on_ready():
     
     # Test VLC connection
     logger.info("Testing VLC connection...")
-    status = vlc.get_status()
+    status = await vlc.run_async("get_status")
     if status is not None:
         state = status.find('state').text
         logger.info(f"Successfully connected to VLC's HTTP interface (Current state: {state})")
@@ -1206,12 +1206,12 @@ async def on_ready():
                 while not _autosave_stop.is_set():
                     try:
                         # Verify VLC is reachable and playlist has entries before saving
-                        status = vlc.get_status()
+                        status = vlc.run_sync("get_status")
                         if status is None:
                             logger.debug("Playlist autosave skipped: VLC HTTP interface not reachable")
                         else:
                             # Check playlist entries
-                            playlist_xml = vlc.get_playlist()
+                            playlist_xml = vlc.run_sync("get_playlist")
                             has_entries = False
                             try:
                                 if playlist_xml is not None:
@@ -1226,7 +1226,7 @@ async def on_ready():
                                 logger.debug("Playlist autosave skipped: playlist is empty or has no entries")
                             else:
                                 if autosave_path.lower().endswith('.xspf'):
-                                    xspf = vlc.export_playlist_xspf()
+                                    xspf = vlc.run_sync("export_playlist_xspf")
                                     if xspf:
                                         logger.info(f"Saving playlist (XSPF) -> {autosave_path}")
                                         with open(autosave_path, 'w', encoding='utf-8') as f:
@@ -1235,7 +1235,7 @@ async def on_ready():
                                     else:
                                         logger.debug("Playlist autosave skipped (no XSPF data returned)")
                                 else:
-                                    data = vlc.export_playlist()
+                                    data = vlc.run_sync("export_playlist")
                                     if data:
                                         logger.info(f"Saving playlist (JSON) -> {autosave_path}")
                                         with open(autosave_path, 'w', encoding='utf-8') as f:
