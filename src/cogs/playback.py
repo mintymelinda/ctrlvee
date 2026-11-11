@@ -3149,20 +3149,22 @@ class PlaybackAdvancedView(discord.ui.View):
 
 
 class QueuePlaylistSelect(discord.ui.Select):
-    """Select a playlist entry to add through the existing soft-queue command."""
+    """Select a playlist entry from the current page to add to the soft queue."""
 
-    def __init__(self, playback_view, playlist_items):
-        self.playback_view = playback_view
+    def __init__(self, picker_view):
+        self.picker_view = picker_view
+        start = picker_view.page * picker_view.page_size
+        page_items = picker_view.playlist_items[start:start + picker_view.page_size]
         options = [
             discord.SelectOption(
                 label=(item.get("name") or "Unknown")[:100],
                 value=str(position),
                 description=f"Playlist item #{position}",
             )
-            for position, item in enumerate(playlist_items[:25], 1)
+            for position, item in enumerate(page_items, start + 1)
         ]
         super().__init__(
-            placeholder="Choose a track to queue next",
+            placeholder=f"Choose a playlist item (page {picker_view.page + 1}/{picker_view.page_count})",
             min_values=1,
             max_values=1,
             options=options,
@@ -3175,38 +3177,72 @@ class QueuePlaylistSelect(discord.ui.Select):
                 ephemeral=True,
             )
             return
-        await self.playback_view._dispatch(
+        await self.picker_view.playback_view._dispatch(
             interaction,
             "queue_next",
             int(self.values[0]),
         )
 
 
-class QueueManageSelect(discord.ui.Select):
-    """Select a soft-queue entry for removal or reordering."""
+class QueuePlaylistView(discord.ui.View):
+    """Private paginated playlist picker for adding any playlist item to the queue."""
 
-    def __init__(self, queue_view, queue_status, playlist):
-        self.queue_view = queue_view
-        queued_items = queue_status.get("queued_items", {})
-        playlist_names = {
-            item.get("id"): item.get("name", "Unknown")
-            for item in (playlist.findall(".//leaf") if playlist is not None else [])
-        }
-        ordered_items = sorted(
-            queued_items.items(),
-            key=lambda entry: entry[1].get("queue_order", 0),
+    page_size = 25
+
+    def __init__(self, playback_view, playlist_items, page=0):
+        super().__init__(timeout=120)
+        self.playback_view = playback_view
+        self.playlist_items = list(playlist_items)
+        self.page_count = max(1, (len(self.playlist_items) + self.page_size - 1) // self.page_size)
+        self.page = min(max(0, page), self.page_count - 1)
+        self.add_item(QueuePlaylistSelect(self))
+        self.previous_button.disabled = self.page == 0
+        self.next_button.disabled = self.page >= self.page_count - 1
+        self.page_button.label = f"Page {self.page + 1}/{self.page_count}"
+
+    async def _change_page(self, interaction, offset):
+        self.page = min(max(0, self.page + offset), self.page_count - 1)
+        self.clear_items()
+        self.add_item(QueuePlaylistSelect(self))
+        self.previous_button.disabled = self.page == 0
+        self.next_button.disabled = self.page >= self.page_count - 1
+        self.page_button.label = f"Page {self.page + 1}/{self.page_count}"
+        await interaction.response.edit_message(
+            content="Choose a playlist item to add to the soft queue.",
+            view=self,
         )
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=1)
+    async def previous_button(self, interaction, button):
+        await self._change_page(interaction, -1)
+
+    @discord.ui.button(label="Page 1/1", style=discord.ButtonStyle.secondary, row=1, disabled=True)
+    async def page_button(self, interaction, button):
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=1)
+    async def next_button(self, interaction, button):
+        await self._change_page(interaction, 1)
+
+
+class QueueManageSelect(discord.ui.Select):
+    """Select a soft-queue entry from the current page for removal or reordering."""
+
+    def __init__(self, queue_view):
+        self.queue_view = queue_view
+        start = queue_view.page * queue_view.page_size
+        page_items = queue_view.ordered_items[start:start + queue_view.page_size]
         options = [
             discord.SelectOption(
                 label=f"#{info.get('queue_order', '?')} - "
-                f"{(playlist_names.get(item_id) or info.get('item_name') or 'Unknown')[:85]}",
+                f"{(queue_view.playlist_names.get(item_id) or info.get('item_name') or 'Unknown')[:85]}",
                 value=str(item_id),
                 description=f"Queue position {info.get('queue_order', position)}",
             )
-            for position, (item_id, info) in enumerate(ordered_items[:25], 1)
+            for position, (item_id, info) in enumerate(page_items, start + 1)
         ]
         super().__init__(
-            placeholder="Choose a queued track to manage",
+            placeholder=f"Choose a queued track (page {queue_view.page + 1}/{queue_view.page_count})",
             min_values=1,
             max_values=1,
             options=options,
@@ -3232,32 +3268,69 @@ class QueueManageSelect(discord.ui.Select):
 class QueueManageView(discord.ui.View):
     """Private queue manager using the controller's serialized queue operations."""
 
-    def __init__(self, cog: PlaybackCommands, queue_status, playlist):
+    page_size = 25
+
+    def __init__(self, cog: PlaybackCommands, queue_status, playlist, page=0):
         super().__init__(timeout=120)
         self.cog = cog
         self.selected_queue_item_id = None
         queued_items = queue_status.get("queued_items", {})
-        self.total_items = len(queued_items)
+        self.ordered_items = sorted(
+            queued_items.items(),
+            key=lambda entry: entry[1].get("queue_order", 0),
+        )
+        self.total_items = len(self.ordered_items)
+        self.page_count = max(1, (self.total_items + self.page_size - 1) // self.page_size)
+        self.page = min(max(0, page), self.page_count - 1)
+        self.playlist_names = {
+            item.get("id"): item.get("name", "Unknown")
+            for item in (playlist.findall(".//leaf") if playlist is not None else [])
+        }
         self.queue_orders = {
             item_id: info.get("queue_order", position)
-            for position, (item_id, info) in enumerate(
-                sorted(
-                    queued_items.items(),
-                    key=lambda entry: entry[1].get("queue_order", 0),
-                ),
-                1,
-            )
+            for position, (item_id, info) in enumerate(self.ordered_items, 1)
         }
-        self.add_item(QueueManageSelect(self, queue_status, playlist))
+        self.add_item(QueueManageSelect(self))
+        self.previous_button.disabled = self.page == 0
+        self.next_button.disabled = self.page >= self.page_count - 1
+        self.page_button.label = f"Page {self.page + 1}/{self.page_count}"
         self.remove_selected_button.disabled = True
         self.move_earlier_button.disabled = True
         self.move_later_button.disabled = True
+
+    async def _change_page(self, interaction, offset):
+        self.page = min(max(0, self.page + offset), self.page_count - 1)
+        self.selected_queue_item_id = None
+        self.clear_items()
+        self.add_item(QueueManageSelect(self))
+        self.previous_button.disabled = self.page == 0
+        self.next_button.disabled = self.page >= self.page_count - 1
+        self.page_button.label = f"Page {self.page + 1}/{self.page_count}"
+        self.remove_selected_button.disabled = True
+        self.move_earlier_button.disabled = True
+        self.move_later_button.disabled = True
+        await interaction.response.edit_message(
+            content="Select a queued track to remove or move earlier/later.",
+            view=self,
+        )
+
+    @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=1)
+    async def previous_button(self, interaction, button):
+        await self._change_page(interaction, -1)
+
+    @discord.ui.button(label="Page 1/1", style=discord.ButtonStyle.secondary, row=1, disabled=True)
+    async def page_button(self, interaction, button):
+        await interaction.response.defer()
+
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.secondary, row=1)
+    async def next_button(self, interaction, button):
+        await self._change_page(interaction, 1)
 
     @discord.ui.button(
         label="Clear Queue",
         emoji="🧹",
         style=discord.ButtonStyle.danger,
-        row=2,
+        row=3,
     )
     async def clear_queue_button(
         self,
@@ -3330,7 +3403,7 @@ class QueueManageView(discord.ui.View):
 
             await interaction.message.edit(
                 content=f"{message}\nSelect another queued track to manage.",
-                view=QueueManageView(self.cog, queue_status, playlist),
+                view=QueueManageView(self.cog, queue_status, playlist, page=self.page),
             )
         except Exception:
             self.cog.logger.exception("Could not update the soft queue from the playback panel")
@@ -3343,7 +3416,7 @@ class QueueManageView(discord.ui.View):
         label="Remove",
         emoji="🗑️",
         style=discord.ButtonStyle.danger,
-        row=1,
+        row=2,
         disabled=True,
     )
     async def remove_selected_button(
@@ -3357,7 +3430,7 @@ class QueueManageView(discord.ui.View):
         label="Move Earlier",
         emoji="⬆️",
         style=discord.ButtonStyle.secondary,
-        row=1,
+        row=2,
         disabled=True,
     )
     async def move_earlier_button(
@@ -3371,7 +3444,7 @@ class QueueManageView(discord.ui.View):
         label="Move Later",
         emoji="⬇️",
         style=discord.ButtonStyle.secondary,
-        row=1,
+        row=2,
         disabled=True,
     )
     async def move_later_button(
@@ -3606,11 +3679,8 @@ class PlaybackControlView(discord.ui.View):
                 queue_status["queued_items"].items(),
                 key=lambda entry: entry[1].get("queue_order", 0),
             )
-            message = "Select a queued track to remove or move earlier/later."
-            if len(ordered_items) > 25:
-                message += " Showing the first 25 entries."
             await interaction.followup.send(
-                message,
+                "Select a queued track to remove or move earlier/later.",
                 view=QueueManageView(self.cog, queue_status, playlist),
                 ephemeral=True,
             )
@@ -3631,12 +3701,11 @@ class PlaybackControlView(discord.ui.View):
                 await interaction.followup.send("The VLC playlist is empty or unavailable.", ephemeral=True)
                 return
 
-            picker = discord.ui.View(timeout=120)
-            picker.add_item(QueuePlaylistSelect(self, playlist_items))
-            message = "Choose a playlist item to add to the soft queue."
-            if len(playlist_items) > 25:
-                message += " Showing the first 25 entries; use !queue_next for later entries."
-            await interaction.followup.send(message, view=picker, ephemeral=True)
+            await interaction.followup.send(
+                "Choose a playlist item to add to the soft queue.",
+                view=QueuePlaylistView(self, playlist_items),
+                ephemeral=True,
+            )
         except Exception:
             self.cog.logger.exception("Could not open the queue picker")
             await interaction.followup.send(
