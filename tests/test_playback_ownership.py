@@ -35,7 +35,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     def test_playback_panel_exposes_seek_buttons(self):
         view = PlaybackControlView(Mock())
         labels = {button.label for button in view.children}
-        self.assertTrue({"Rewind 10s", "Forward 10s"}.issubset(labels))
+        self.assertTrue({"Rewind 10s", "Forward 10s", "Rewind 30s", "Forward 30s"}.issubset(labels))
 
     async def test_seek_buttons_dispatch_fixed_ten_second_offsets(self):
         cog = Mock()
@@ -43,14 +43,15 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         view._dispatch = AsyncMock()
         interaction = Mock()
 
-        rewind_button = next(button for button in view.children if button.label == "Rewind 10s")
-        forward_button = next(button for button in view.children if button.label == "Forward 10s")
-        await rewind_button.callback(interaction)
-        await forward_button.callback(interaction)
+        buttons = {button.label: button for button in view.children}
+        for label in ("Rewind 10s", "Forward 10s", "Rewind 30s", "Forward 30s"):
+            await buttons[label].callback(interaction)
 
         view._dispatch.assert_has_awaits([
             call(interaction, "rewind", 10),
             call(interaction, "forward", 10),
+            call(interaction, "rewind", 30),
+            call(interaction, "forward", 30),
         ])
 
     def test_playback_panel_exposes_add_to_queue_button(self):
