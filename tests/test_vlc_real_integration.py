@@ -49,7 +49,11 @@ class RealVLCIntegrationTests(unittest.TestCase):
         cls.process = subprocess.Popen(
             [
                 "cvlc",
-                "--intf", "http",
+                # Keep VLC's headless dummy interface as the primary
+                # interface; expose the HTTP control server as an extra
+                # interface rather than making the Lua HTTP module the UI.
+                "--intf", "dummy",
+                "--extraintf", "http",
                 "--http-host", "127.0.0.1",
                 "--http-port", str(cls.port),
                 "--http-password", cls.password,
