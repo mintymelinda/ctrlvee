@@ -30,6 +30,11 @@ class VLCControllerTests(unittest.TestCase):
             self.controller, "get_current_position", return_value=0
         ), patch.object(
             self.controller, "_parse_playlist_info", return_value=({str(item_id): {"name": str(item_id)}}, None)
+        ), patch.object(
+            self.controller, "get_playlist",
+            return_value=ET.fromstring(
+                f'<playlist><leaf id="{item_id}" name="{item_id}" uri="file:///media/{item_id}.mkv"/></playlist>'
+            ),
         ), patch("src.services.vlc_controller.uuid.uuid4", return_value=item_id):
             result = self.controller.queue_item_next(item_id)
         self.assertTrue(result["success"], result)
@@ -186,6 +191,9 @@ class VLCControllerTests(unittest.TestCase):
             self.controller, "get_current_position", return_value=0
         ), patch.object(
             self.controller, "_parse_playlist_info", return_value=({"vlc-42": {"name": "Repeated media"}}, None)
+        ), patch.object(
+            self.controller, "get_playlist",
+            return_value=ET.fromstring('<playlist><leaf id="vlc-42" name="Repeated media" uri="file:///media/repeated.mkv"/></playlist>'),
         ), patch("src.services.vlc_controller.uuid.uuid4", side_effect=["queue-entry-a", "queue-entry-b"]):
             first = self.controller.queue_item_next("vlc-42")
             second = self.controller.queue_item_next("vlc-42")
@@ -355,6 +363,52 @@ class VLCControllerTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertTrue(result["attempted"])
         play.assert_called_once_with("queued")
+
+    def test_reconciliation_rebinds_queue_entry_when_vlc_regenerates_playlist_id(self):
+        self.controller._queued_items = {
+            "queue-entry": {
+                "queue_id": "queue-entry",
+                "playlist_item_id": "old-vlc-id",
+                "item_id": "old-vlc-id",
+                "media_uri": "file:///media/movie.mkv",
+                "item_name": "Movie",
+                "queue_order": 1,
+            }
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="new-vlc-id" name="Movie" uri="file:///media/movie.mkv"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist):
+            result = self.controller.reconcile_queue_with_playlist()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["rebound_queue_ids"], ["queue-entry"])
+        self.assertEqual(result["queued_item_ids"], ["queue-entry"])
+        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "new-vlc-id")
+        self.assertEqual(self.controller.get_next_queued_item()["queue_id"], "queue-entry")
+        self.assertEqual(self.controller.get_next_queued_item()["item_id"], "new-vlc-id")
+
+    def test_reconciliation_keeps_entry_when_media_uri_matches_multiple_vlc_items(self):
+        self.controller._queued_items = {
+            "queue-entry": {
+                "queue_id": "queue-entry",
+                "playlist_item_id": "old-vlc-id",
+                "media_uri": "file:///media/movie.mkv",
+                "item_name": "Movie",
+                "queue_order": 1,
+            }
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="new-a" uri="file:///media/movie.mkv"/>'
+            '<leaf id="new-b" uri="file:///media/movie.mkv"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist):
+            result = self.controller.reconcile_queue_with_playlist()
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["ambiguous_queue_ids"], ["queue-entry"])
+        self.assertIn("queue-entry", self.controller._queued_items)
+        self.assertEqual(self.controller._queued_items["queue-entry"]["playlist_item_id"], "old-vlc-id")
 
     def test_queue_backup_round_trip_preserves_independent_queue_identity(self):
         self.controller._queued_items = {
