@@ -274,7 +274,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         )
         interaction.response.defer.assert_awaited_once_with(ephemeral=True)
         interaction.edit_original_response.assert_awaited_once()
-        self.assertIn("have been cleared", interaction.edit_original_response.await_args.kwargs["content"])
+        self.assertIn("has been cleared", interaction.edit_original_response.await_args.kwargs["content"])
         self.assertIsNone(interaction.edit_original_response.await_args.kwargs["view"])
 
     def test_queue_manager_preserves_queue_order_and_exposes_mutations(self):
