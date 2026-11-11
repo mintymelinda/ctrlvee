@@ -32,6 +32,14 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_member_has_allowed_role(member, ["42"]))
         self.assertFalse(_member_has_allowed_role(member, ["Admin"]))
 
+    def test_playback_panel_is_persistent_across_timeouts_and_restarts(self):
+        view = PlaybackControlView(Mock())
+        self.assertIsNone(view.timeout)
+        buttons = [child for child in view.children if isinstance(child, discord.ui.Button)]
+        self.assertTrue(buttons)
+        self.assertTrue(all(button.custom_id for button in buttons))
+        self.assertEqual(len({button.custom_id for button in buttons}), len(buttons))
+
     def test_playback_panel_exposes_queue_and_shuffle_buttons(self):
         view = PlaybackControlView(Mock())
         labels = {button.label for button in view.children}
