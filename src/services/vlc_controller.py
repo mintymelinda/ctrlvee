@@ -142,6 +142,31 @@ class VLCController:
             return {"success": False, "error": "item_id_missing"}
         return {"success": bool(self.play_item(item_id)), "item": item, "item_id": item_id, "playlist_count": len(items)}
 
+    def play_item_and_capture(self, item_id: str):
+        """Validate a playlist item and issue its item-specific play command atomically."""
+        playlist = self.get_playlist()
+        if playlist is None:
+            return {"success": False, "reason": "playlist_unavailable"}
+        item, position = next(
+            (
+                (leaf, index)
+                for index, leaf in enumerate(playlist.findall(".//leaf"), start=1)
+                if str(leaf.get("id")) == str(item_id)
+            ),
+            (None, None),
+        )
+        if item is None:
+            return {"success": False, "reason": "item_not_found"}
+        result = self.play_item(item_id)
+        if result is None:
+            return {"success": False, "reason": "play_command_failed"}
+        return {
+            "success": True,
+            "item_id": str(item_id),
+            "item": item,
+            "position": position,
+        }
+
     def resume_selected_item_if_current(self, expected_item_id: str, resume: bool = True):
         """Resume only the playlist item selected by the caller, if it is still current.
 

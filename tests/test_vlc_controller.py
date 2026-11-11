@@ -65,6 +65,35 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["item"].get("name"), "Second")
         play.assert_called_once_with("2")
 
+    def test_play_item_and_capture_rejects_item_missing_from_live_playlist(self):
+        playlist = ET.fromstring('<playlist><leaf id="newer" name="Newer"/></playlist>')
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "play_item"
+        ) as play:
+            result = self.controller.play_item_and_capture("stale")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "item_not_found")
+        play.assert_not_called()
+
+    def test_play_item_and_capture_validates_and_plays_item_under_one_operation(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first" name="First"/>'
+            '<leaf id="selected" name="Selected"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller,
+            "play_item",
+            return_value=ET.fromstring("<root><ok/></root>"),
+        ) as play:
+            result = self.controller.play_item_and_capture("selected")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["item_id"], "selected")
+        self.assertEqual(result["position"], 2)
+        self.assertEqual(result["item"].get("name"), "Selected")
+        play.assert_called_once_with("selected")
+
     def test_resume_selected_item_only_targets_the_still_current_item(self):
         playlist = ET.fromstring('<playlist><leaf id="selected" current="current"/></playlist>')
         status = ET.fromstring("<root><state>paused</state></root>")
