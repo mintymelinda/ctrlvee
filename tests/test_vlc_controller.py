@@ -622,9 +622,9 @@ class VLCControllerTests(unittest.TestCase):
 
     def test_move_queued_item_by_id_reorders_and_persists_without_changing_shuffle_restore(self):
         self.controller._queued_items = {
-            "A": {"item_name": "Alpha", "queue_order": 1, "restore_shuffle": True},
-            "B": {"item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
-            "C": {"item_name": "Charlie", "queue_order": 3, "restore_shuffle": True},
+            "A": {"queue_id": "A", "playlist_item_id": "A", "item_id": "A", "item_name": "Alpha", "queue_order": 1, "restore_shuffle": True},
+            "B": {"queue_id": "B", "playlist_item_id": "B", "item_id": "B", "item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
+            "C": {"queue_id": "C", "playlist_item_id": "C", "item_id": "C", "item_name": "Charlie", "queue_order": 3, "restore_shuffle": True},
         }
         self.controller._shuffle_restore_queue = ["A", "C"]
 
