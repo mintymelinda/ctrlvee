@@ -75,53 +75,95 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._schedule_lock = asyncio.Lock()
         scheduler._schedule_locks = {}
         scheduler._save_schedule_backup = Mock()
+
+        if isinstance(vlc.get_status.return_value, Mock):
+            vlc.get_status.return_value = ET.fromstring(
+                "<root><state>playing</state></root>"
+            )
+
+        def current_playlist_item(playlist):
+            items = playlist.findall(".//leaf")
+            for position, item in enumerate(items, start=1):
+                if item.get("current") is not None:
+                    return item, position
+            return None, None
+
+        vlc._current_playlist_item = current_playlist_item
+
         async def run_async(method_name, *args, **kwargs):
             if method_name == "get_playback_snapshot":
                 playlist = vlc.get_playlist()
                 if not isinstance(playlist, ET.Element):
                     playlist = ET.Element("playlist")
-                return ET.fromstring("<root><state>playing</state></root>"), playlist
+                return vlc.get_status(), playlist
             if method_name == "get_current_item_if_unchanged":
+                status = vlc.get_status()
                 playlist = vlc.get_playlist()
-                if not isinstance(playlist, ET.Element):
+                if not isinstance(status, ET.Element) or not isinstance(playlist, ET.Element):
                     return {"success": False, "reason": "playback_unavailable"}
-                current = next(
-                    (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
-                    None,
-                )
-                if current is None or str(current.get("id")) != str(args[0]):
-                    return {"success": False, "reason": "selection_changed"}
-                return {"success": True, "reason": "confirmed", "state": "playing", "item_id": args[0]}
+                current, position = current_playlist_item(playlist)
+                current_id = current.get("id") if current is not None else None
+                if str(current_id) != str(args[0]):
+                    return {
+                        "success": False,
+                        "reason": "selection_changed",
+                        "current_item_id": current_id,
+                    }
+                return {
+                    "success": True,
+                    "reason": "confirmed",
+                    "state": status.findtext("state"),
+                    "item_id": current_id,
+                    "item": current,
+                    "position": position,
+                }
             if method_name == "play_scheduled_item_if_unchanged":
                 item_id, expected_id = args
                 playlist = vlc.get_playlist()
                 if not isinstance(playlist, ET.Element):
-                    playlist = ET.Element("playlist")
-                    if expected_id is not None:
-                        current = leaf(str(expected_id))
-                        current.set("current", "current")
-                        playlist.append(current)
-                    playlist.append(leaf(str(item_id)))
-                current = next(
-                    (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
-                    None,
-                )
+                    return {"success": False, "confirmed": False, "reason": "playback_unavailable"}
+                current, _ = current_playlist_item(playlist)
                 current_id = current.get("id") if current is not None else None
                 if str(current_id) != str(expected_id):
-                    return {"success": False, "confirmed": False, "reason": "playback_changed"}
-                result = vlc.play_item(item_id)
-                current = next(
-                    (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
+                    return {
+                        "success": False,
+                        "confirmed": False,
+                        "reason": "playback_changed",
+                        "current_item_id": current_id,
+                    }
+                target = next(
+                    (item for item in playlist.findall(".//leaf") if str(item.get("id")) == str(item_id)),
                     None,
                 )
-                confirmed = current is not None and str(current.get("id")) == str(item_id)
+                if target is None:
+                    return {"success": False, "confirmed": False, "reason": "item_not_found"}
+                result = vlc.play_item(item_id)
+                if result is None or result is False:
+                    return {
+                        "success": False,
+                        "confirmed": False,
+                        "reason": "play_command_failed",
+                        "source_item_id": current_id,
+                    }
+                status = vlc.get_status()
+                confirmed_playlist = vlc.get_playlist()
+                if not isinstance(confirmed_playlist, ET.Element):
+                    confirmed_playlist = ET.Element("playlist")
+                confirmed_item, _ = current_playlist_item(confirmed_playlist)
+                confirmed = bool(
+                    isinstance(status, ET.Element)
+                    and status.findtext("state") == "playing"
+                    and confirmed_item is not None
+                    and str(confirmed_item.get("id")) == str(item_id)
+                )
                 return {
-                    "success": result is not None and result is not False,
+                    "success": True,
                     "confirmed": confirmed,
                     "reason": "confirmed" if confirmed else "awaiting_confirmation",
                     "source_item_id": current_id,
                 }
             return getattr(vlc, method_name)(*args, **kwargs)
+
         vlc.run_async = AsyncMock(side_effect=run_async)
         return scheduler
 
@@ -287,7 +329,9 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = ET.Element("root")
-        vlc.get_playlist.return_value = ET.Element("playlist")
+        playlist = ET.Element("playlist")
+        playlist.append(leaf("Heat (1995).mkv"))
+        vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
         outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
@@ -329,14 +373,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         live.set("current", "current")
         playlist = ET.Element("playlist")
         playlist.append(live)
-        vlc.get_playback_snapshot.return_value = (
-            ET.Element("root"),
-            playlist,
-        )
-        vlc._current_playlist_item = lambda value: (
-            next((item for item in value.findall(".//leaf") if item.get("current")), None),
-            1,
-        )
+        vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
         outcome = await scheduler._execute_due_schedule(
@@ -357,6 +394,12 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             execution_started_at=started.isoformat(),
         )
         vlc = Mock()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
+        vlc.get_status.return_value = ET.fromstring("<root><state>paused</state></root>")
         scheduler = self.make_scheduler(schedule, vlc)
         now = datetime.now(PH_TZ)
 
@@ -394,7 +437,14 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             execution_started_at=started.isoformat(),
         )
         previous = schedule.copy()
-        scheduler = self.make_scheduler(schedule, Mock())
+        vlc = Mock()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
+        vlc.get_status.return_value = ET.fromstring("<root><state>paused</state></root>")
+        scheduler = self.make_scheduler(schedule, vlc)
         scheduler._save_schedule_backup.return_value = False
 
         result = await scheduler._execute_due_schedule(
@@ -442,6 +492,12 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = None
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current)
+        vlc.get_playlist.return_value = playlist
+        vlc.get_status.return_value = ET.fromstring("<root><state>paused</state></root>")
         scheduler = self.make_scheduler(schedule, vlc)
         now = datetime.now(PH_TZ)
 
@@ -479,9 +535,12 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             status="executing", attempt_count=1, target_item_id="Heat (1995).mkv"
         )
         vlc = Mock()
-        scheduler = self.make_scheduler(schedule, vlc)
         current_leaf = leaf("Heat (1995).mkv")
         current_leaf.set("current", "current")
+        playlist = ET.Element("playlist")
+        playlist.append(current_leaf)
+        vlc.get_playlist.return_value = playlist
+        scheduler = self.make_scheduler(schedule, vlc)
 
         outcome = await scheduler._execute_due_schedule(schedule, current_leaf, datetime.now(PH_TZ))
 
@@ -507,15 +566,13 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
             schedule, rebound_leaf, datetime.now(PH_TZ)
         )
 
-        self.assertEqual(outcome, "announcing")
-        vlc.play_item.assert_called_once_with("Alien (1979).mkv")
-        self.assertEqual(scheduler.scheduled, [schedule])
-        self.assertEqual(schedule["status"], "announcing")
+        self.assertEqual(outcome, "superseded")
+        vlc.play_item.assert_not_called()
+        self.assertEqual(scheduler.scheduled, [])
 
-    async def test_restart_retries_interrupted_attempt_when_target_is_not_current(self):
+    async def test_restart_without_target_identity_fails_closed(self):
         schedule = self.make_schedule(status="executing", attempt_count=1)
         vlc = Mock()
-        vlc.play_item.return_value = object()
         current = leaf("Heat (1995).mkv")
         current.set("current", "current")
         playlist = ET.Element("playlist")
@@ -523,12 +580,14 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(
+            schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ)
+        )
 
-        self.assertEqual(outcome, "announcing")
-        vlc.play_item.assert_called_once_with("Heat (1995).mkv")
+        self.assertEqual(outcome, "confirming")
+        vlc.play_item.assert_not_called()
         self.assertEqual(scheduler.scheduled, [schedule])
-        self.assertEqual(schedule["status"], "announcing")
+        self.assertEqual(schedule["status"], "executing")
 
     def test_retry_state_survives_backup_reload(self):
         schedule = self.make_schedule(
@@ -572,7 +631,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._save_schedule_backup.return_value = True
 
         operation = asyncio.create_task(scheduler._pre_announce_schedule(schedule))
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         acquired = False
         try:
             await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
@@ -607,7 +666,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await scheduler._announce_schedule_started(schedule)
 
         operation = asyncio.create_task(announce())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         acquired = False
         try:
             await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
@@ -642,7 +701,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await scheduler._announce_schedule_started(schedule)
 
         announcement = asyncio.create_task(announce())
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         ctx = Mock()
         ctx.send = AsyncMock()
         removal = asyncio.create_task(Scheduler.unschedule.callback(scheduler, ctx, 1))
@@ -696,18 +755,35 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         current = leaf("Heat (1995).mkv")
         current.set("current", "current")
 
+        vlc._current_playlist_item = lambda value: (
+            next((item for item in value.findall(".//leaf") if item.get("current")), None),
+            1,
+        )
+
         async def run_async(method_name, *args, **kwargs):
-            if method_name == "play_item_and_confirm":
+            if method_name == "get_playback_snapshot":
+                playlist = ET.Element("playlist")
+                current = leaf("Current.mkv")
+                current.set("current", "current")
+                playlist.append(current)
+                playlist.append(leaf("Heat (1995).mkv"))
+                return ET.fromstring("<root><state>playing</state></root>"), playlist
+            if method_name == "play_scheduled_item_if_unchanged":
                 entered.set()
                 await release.wait()
-                return object(), True, None
+                return {
+                    "success": True,
+                    "confirmed": True,
+                    "reason": "confirmed",
+                    "source_item_id": "Current.mkv",
+                }
             return getattr(vlc, method_name)(*args, **kwargs)
 
         vlc.run_async = AsyncMock(side_effect=run_async)
         operation = asyncio.create_task(
             scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
         )
-        await entered.wait()
+        await asyncio.wait_for(entered.wait(), timeout=2)
         acquired = False
         try:
             await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)

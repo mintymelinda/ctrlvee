@@ -2064,10 +2064,15 @@ class PlaybackCommands(commands.Cog):
                 recovery = await self.vlc.run_async(
                     "resume_selected_item_if_current", item_id
                 )
-                if recovery["reason"] == "playlist_unavailable" or recovery["reason"] == "status_unavailable":
-                    await ctx.send(f'Started playing item #{number}')
+                if recovery["reason"] in {"playlist_unavailable", "status_unavailable"}:
+                    self._clear_command_initiated_item(item_id)
+                    await ctx.send(
+                        "VLC accepted the selection, but playback could not be confirmed "
+                        "because its current state is unavailable."
+                    )
                     return
                 if recovery["reason"] == "selection_changed":
+                    self._clear_command_initiated_item(item_id)
                     logger.info(
                         "Skipping delayed play recovery for item %s; VLC selection changed to %s",
                         item_id,
@@ -2082,6 +2087,7 @@ class PlaybackCommands(commands.Cog):
                         "resume_selected_item_if_current", item_id
                     )
                     if recovery["reason"] == "selection_changed":
+                        self._clear_command_initiated_item(item_id)
                         logger.info(
                             "Skipping playback retry for item %s; VLC selection changed",
                             item_id,
@@ -2092,6 +2098,7 @@ class PlaybackCommands(commands.Cog):
                         "resume_selected_item_if_current", item_id, resume=False
                     )
                     if recovery["reason"] == "selection_changed":
+                        self._clear_command_initiated_item(item_id)
                         logger.info(
                             "Skipping playback announcement for item %s; VLC selection changed",
                             item_id,
@@ -2099,6 +2106,7 @@ class PlaybackCommands(commands.Cog):
                         return
 
                 if recovery.get("state") != "playing":
+                    self._clear_command_initiated_item(item_id)
                     await ctx.send(
                         "VLC accepted the selection, but playback could not be confirmed."
                     )
@@ -2117,6 +2125,14 @@ class PlaybackCommands(commands.Cog):
         except ValueError:
             await ctx.send('Please provide a valid number')
             
+    def _clear_command_initiated_item(self, expected_item_id: str | None) -> None:
+        """Clear only this command's monitor-suppression marker."""
+        if (
+            expected_item_id is not None
+            and self._command_initiated_item_id == str(expected_item_id)
+        ):
+            self._command_initiated_item_id = None
+
     async def _confirm_navigation_target(
         self,
         ctx,
@@ -2135,6 +2151,7 @@ class PlaybackCommands(commands.Cog):
             "get_current_item_if_unchanged", expected_item_id
         )
         if confirmation.get("reason") == "selection_changed":
+            self._clear_command_initiated_item(expected_item_id)
             logger.info(
                 "Skipping stale navigation announcement for item %s; current item is %s",
                 expected_item_id,
@@ -2142,6 +2159,7 @@ class PlaybackCommands(commands.Cog):
             )
             return False
         if not confirmation.get("success"):
+            self._clear_command_initiated_item(expected_item_id)
             await ctx.send(fallback_message)
             return False
 
@@ -2152,6 +2170,7 @@ class PlaybackCommands(commands.Cog):
             )
             if not confirmation.get("success"):
                 if confirmation.get("reason") == "selection_changed":
+                    self._clear_command_initiated_item(expected_item_id)
                     logger.info(
                         "Skipping stale navigation retry for item %s; current item is %s",
                         expected_item_id,
@@ -2162,12 +2181,14 @@ class PlaybackCommands(commands.Cog):
                 return False
 
         if confirmation.get("state") != "playing":
+            self._clear_command_initiated_item(expected_item_id)
             await ctx.send(fallback_message)
             return False
 
         item = confirmation.get("item")
         position = confirmation.get("position")
         if item is None:
+            self._clear_command_initiated_item(expected_item_id)
             await ctx.send(fallback_message)
             return False
 
