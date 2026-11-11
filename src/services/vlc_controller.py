@@ -1313,7 +1313,7 @@ class VLCController:
         return next(
             (
                 queue_id for queue_id, info in self._queued_items.items()
-                if str(info.get("playlist_item_id", info.get("item_id"))) == wanted
+                if str(info.get("playlist_item_id", info.get("item_id", queue_id))) == wanted
             ),
             None,
         )
@@ -1410,7 +1410,7 @@ class VLCController:
                 entry[1].get("queued_at_time", 0),
             ),
         )
-        playlist_item_id = info.get("playlist_item_id", info.get("item_id"))
+        playlist_item_id = info.get("playlist_item_id", info.get("item_id", queue_id))
         return {
             "queue_id": queue_id,
             "item_id": str(playlist_item_id) if playlist_item_id is not None else None,
@@ -1653,8 +1653,12 @@ class VLCController:
         }
         removed_queue_ids = []
         for queue_id, info in list(self._queued_items.items()):
-            playlist_item_id = info.get("playlist_item_id", info.get("item_id"))
-            if not isinstance(info, dict) or playlist_item_id is None or str(playlist_item_id) not in live_ids:
+            if not isinstance(info, dict):
+                removed_queue_ids.append(queue_id)
+                self._queued_items.pop(queue_id, None)
+                continue
+            playlist_item_id = info.get("playlist_item_id", info.get("item_id", queue_id))
+            if playlist_item_id is None or str(playlist_item_id) not in live_ids:
                 removed_queue_ids.append(queue_id)
                 self._queued_items.pop(queue_id, None)
 
@@ -1709,7 +1713,7 @@ class VLCController:
         current_id = str(current.get("id")) if current is not None else None
         candidate_queue_ids = [str(value) for value in queue_ids]
         candidates = {
-            queue_id: str(self._queued_items[queue_id].get("playlist_item_id", self._queued_items[queue_id].get("item_id")))
+            queue_id: str(self._queued_items[queue_id].get("playlist_item_id", self._queued_items[queue_id].get("item_id", queue_id)))
             for queue_id in candidate_queue_ids if queue_id in self._queued_items
         }
         preserved_queue_ids = []
@@ -1811,7 +1815,7 @@ class VLCController:
             result = self._reconcile_queued_playlist_items([queue_id], protected_item_ids, protected_uris)
             result.update({
                 "queue_id": queue_id,
-                "removed_item_id": info.get("playlist_item_id", info.get("item_id")),
+                "removed_item_id": info.get("playlist_item_id", info.get("item_id", queue_id)),
                 "item_name": info.get("item_name", "Unknown"),
             })
             if not result["success"] and result.get("error") is None:
