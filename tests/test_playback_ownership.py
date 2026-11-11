@@ -1,4 +1,6 @@
 import unittest
+import json
+import tempfile
 
 import discord
 import xml.etree.ElementTree as ET
@@ -325,6 +327,50 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             "queue_playlist_item_by_id",
             "vlc-42",
         )
+
+    async def test_playback_panel_registry_restores_messages_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry_path = f"{directory}/playback_panels.json"
+            channel = SimpleNamespace(id=321)
+            message = SimpleNamespace(id=654, channel=channel)
+            writer = PlaybackCommands.__new__(PlaybackCommands)
+            writer.logger = Mock()
+            writer._playback_panel_messages = {654: message}
+            with patch.object(Config, "PLAYBACK_PANEL_REGISTRY_PATH", registry_path):
+                writer._save_playback_panel_registry()
+                with open(registry_path, "r", encoding="utf-8") as registry_file:
+                    self.assertEqual(
+                        json.load(registry_file),
+                        [{"channel_id": 321, "message_id": 654}],
+                    )
+
+                panel_embed = discord.Embed(title="Now Playing: Persisted")
+                panel_embed.set_footer(
+                    text="Video playback controls and queue overview. Playback actions are restricted to permitted roles."
+                )
+                restored_message = SimpleNamespace(
+                    id=654,
+                    author=SimpleNamespace(id=999),
+                    embeds=[panel_embed],
+                    edit=AsyncMock(),
+                )
+                channel.fetch_message = AsyncMock(return_value=restored_message)
+                bot = SimpleNamespace(
+                    user=SimpleNamespace(id=999),
+                    get_channel=Mock(return_value=channel),
+                    fetch_channel=AsyncMock(),
+                )
+                reader = PlaybackCommands.__new__(PlaybackCommands)
+                reader.bot = bot
+                reader.logger = Mock()
+                reader._playback_panel_messages = {}
+                reader._playback_panel_registry_restored = False
+
+                await reader._restore_playback_panel_registry()
+
+                self.assertIs(reader._playback_panel_messages[654], restored_message)
+                channel.fetch_message.assert_awaited_once_with(654)
+                bot.fetch_channel.assert_not_awaited()
 
     async def test_refresh_playback_panels_updates_registered_message(self):
         cog = PlaybackCommands.__new__(PlaybackCommands)
