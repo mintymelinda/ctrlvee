@@ -370,7 +370,7 @@ class VLCControllerTests(unittest.TestCase):
 
         self.assertEqual(path, "/media/Some Show/Episode 1.mkv")
 
-    def test_move_queue_item_by_order_reorders_and_persists_without_changing_shuffle_restore(self):
+    def test_move_queued_item_by_id_reorders_and_persists_without_changing_shuffle_restore(self):
         self.controller._queued_items = {
             "A": {"item_name": "Alpha", "queue_order": 1, "restore_shuffle": True},
             "B": {"item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
@@ -378,7 +378,7 @@ class VLCControllerTests(unittest.TestCase):
         }
         self.controller._shuffle_restore_queue = ["A", "C"]
 
-        result = self.controller.move_queue_item_by_order(3, "up")
+        result = self.controller.move_queued_item_by_id("C", "up")
 
         self.assertTrue(result["success"])
         self.assertEqual(result["item_id"], "C")
@@ -395,15 +395,15 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(restored._queued_items, self.controller._queued_items)
         self.assertEqual(restored._shuffle_restore_queue, ["A", "C"])
 
-    def test_move_queue_item_by_order_rejects_invalid_direction_and_queue_boundaries(self):
+    def test_move_queued_item_by_id_rejects_invalid_direction_and_queue_boundaries(self):
         self.controller._queued_items = {
             "A": {"item_name": "Alpha", "queue_order": 1},
             "B": {"item_name": "Bravo", "queue_order": 2},
         }
 
-        invalid_direction = self.controller.move_queue_item_by_order(1, "sideways")
-        at_top = self.controller.move_queue_item_by_order(1, "up")
-        at_bottom = self.controller.move_queue_item_by_order(2, "down")
+        invalid_direction = self.controller.move_queued_item_by_id("A", "sideways")
+        at_top = self.controller.move_queued_item_by_id("A", "up")
+        at_bottom = self.controller.move_queued_item_by_id("B", "down")
 
         self.assertFalse(invalid_direction["success"])
         self.assertFalse(at_top["success"])
@@ -412,6 +412,32 @@ class VLCControllerTests(unittest.TestCase):
             [item["queue_order"] for item in self.controller._queued_items.values()],
             [1, 2],
         )
+
+    def test_remove_from_queue_by_id_uses_stable_identity_and_compacts_order(self):
+        self.controller._queued_items = {
+            "A": {"item_name": "Alpha", "queue_order": 1, "restore_shuffle": True},
+            "B": {"item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
+        }
+        self.controller._shuffle_restore_queue = ["A"]
+
+        result = self.controller.remove_from_queue_by_id("A")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["removed_item_id"], "A")
+        self.assertEqual(self.controller._queued_items["B"]["queue_order"], 1)
+        self.assertEqual(self.controller._shuffle_restore_queue, [])
+
+    def test_queue_management_by_id_rejects_stale_playlist_identity(self):
+        self.controller._queued_items = {
+            "current": {"item_name": "Current", "queue_order": 1},
+        }
+
+        removed = self.controller.remove_from_queue_by_id("stale")
+        moved = self.controller.move_queued_item_by_id("stale", "down")
+
+        self.assertFalse(removed["success"])
+        self.assertFalse(moved["success"])
+        self.assertEqual(list(self.controller._queued_items), ["current"])
 
     def test_queue_order_is_compacted_after_removal_and_insertion(self):
         self.queue_item("A")
