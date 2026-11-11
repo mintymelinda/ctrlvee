@@ -71,12 +71,6 @@ vlc = VLCController(bot=bot)
 tmdb_service = TMDBService()
 watch_service = WatchFolderService(vlc)
 stats_service = StatsService(path=Config.WATCH_STATS_FILE, excluded=Config.STATS_EXCLUDED_USER_IDS)
-voice_channel_service = VoiceChannelService(
-    bot,
-    connect_timeout=Config.VOICE_CONNECT_TIMEOUT,
-)
-# PlaybackCommands calls this shared service before applying its existing room/ownership guards.
-bot.join_member_voice_channel = voice_channel_service.join_member_channel
 _radarr_services = []
 try:
     # Build Radarr service instances from config (multi or single)
@@ -295,8 +289,16 @@ _VOICE_ERROR_CODES = {
     4015: "Server missed last heartbeat",
 }
 
-# Serialize voice join attempts to avoid overlapping connects
+# Serialize voice join attempts to avoid overlapping connects. Command joins,
+# startup joins, and reconnects all use this same lock.
 _voice_join_lock = asyncio.Lock()
+voice_channel_service = VoiceChannelService(
+    bot,
+    connect_timeout=Config.VOICE_CONNECT_TIMEOUT,
+    connection_lock=_voice_join_lock,
+)
+# PlaybackCommands calls this shared service before applying its existing room/ownership guards.
+bot.join_member_voice_channel = voice_channel_service.join_member_channel
 __last_connect_attempt_ts = 0.0
 
 async def _voice_connection_guard():
