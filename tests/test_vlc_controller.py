@@ -179,6 +179,39 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["reason"], "not_playing")
         play.assert_not_called()
 
+    def test_queue_entries_have_independent_ids_and_can_reference_same_vlc_item(self):
+        with patch.object(self.controller, "get_shuffle_state", return_value=False), patch.object(
+            self.controller, "_parse_playlist_info", return_value=({"vlc-42": {"name": "Repeated media"}}, None)
+        ), patch("src.services.vlc_controller.uuid.uuid4", side_effect=["queue-entry-a", "queue-entry-b"]):
+            first = self.controller.queue_item_next("vlc-42")
+            second = self.controller.queue_item_next("vlc-42")
+
+        self.assertTrue(first["success"])
+        self.assertTrue(second["success"])
+        self.assertNotEqual(first["queue_id"], first["item_id"])
+        self.assertNotEqual(first["queue_id"], second["queue_id"])
+        self.assertEqual(len(self.controller._queued_items), 2)
+        self.assertEqual(self.controller.get_next_queued_item()["queue_id"], "queue-entry-a")
+        self.assertEqual(self.controller.get_next_queued_item()["playlist_item_id"], "vlc-42")
+
+    def test_removing_one_duplicate_queue_entry_keeps_shared_vlc_reference(self):
+        self.controller._queued_items = {
+            "queue-a": {"queue_id": "queue-a", "playlist_item_id": "vlc-42", "item_id": "vlc-42", "item_name": "Repeated", "queue_order": 1},
+            "queue-b": {"queue_id": "queue-b", "playlist_item_id": "vlc-42", "item_id": "vlc-42", "item_name": "Repeated", "queue_order": 2},
+        }
+        playlist = ET.fromstring('<playlist><leaf id="vlc-42" name="Repeated"/></playlist>')
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "delete_playlist_item"
+        ) as delete:
+            result = self.controller.remove_from_queue_by_id("queue-a")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["queue_id"], "queue-a")
+        self.assertEqual(result["removed_item_id"], "vlc-42")
+        delete.assert_not_called()
+        self.assertNotIn("queue-a", self.controller._queued_items)
+        self.assertIn("queue-b", self.controller._queued_items)
+
     def test_queue_playlist_item_at_position_selects_and_queues_atomically(self):
         playlist = ET.fromstring('<playlist><leaf id="1" name="First"/><leaf id="2" name="Second"/></playlist>')
         queued = {"success": True, "queue_order": 1, "total_queued": 1}
