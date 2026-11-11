@@ -3404,6 +3404,14 @@ class PlaybackControlView(discord.ui.View):
     async def restart_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "restart")
 
+    @discord.ui.button(label="Rewind 10s", emoji="⏪", style=discord.ButtonStyle.secondary, row=1)
+    async def rewind_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "rewind", 10)
+
+    @discord.ui.button(label="Forward 10s", emoji="⏩", style=discord.ButtonStyle.secondary, row=1)
+    async def forward_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._dispatch(interaction, "forward", 10)
+
     @discord.ui.button(label="Toggle Shuffle", emoji="🔀", style=discord.ButtonStyle.primary, row=1)
     async def shuffle_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "shuffle_toggle")
