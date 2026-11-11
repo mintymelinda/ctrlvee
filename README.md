@@ -170,7 +170,7 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 
 ### Playback
 
-- `!panel` — post an interactive playback panel with Previous, Play, Pause, Stop, Next, Restart, Toggle Shuffle, View Queue, and Add to Queue controls; the panel summarizes shuffle state and the first three soft-queue entries, while Add to Queue opens a private playlist picker (available to configured playback roles)
+- `!panel` — post an interactive playback panel with Previous, Play, Pause, Stop, Next, Restart, Toggle Shuffle, View Queue, Add to Queue, and Manage Queue controls; Add to Queue opens a private playlist picker, while Manage Queue lets playback roles privately remove queued tracks or move them earlier/later
 - `!play`, `!pause`, `!stop`, `!restart`
 - `!next`, `!previous`
 - `!rewind [seconds]`, `!forward [seconds]`
@@ -200,6 +200,7 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 - `!queue_status`
 - `!clear_queue`
 - `!remove_queue <N|#N>`
+- The playback panel's **Manage Queue** control provides private selection, removal, and one-position reordering for soft-queued tracks
 
 ### Scheduling
 
