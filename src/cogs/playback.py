@@ -3407,7 +3407,7 @@ class QueuePlaylistSelect(discord.ui.Select):
 
 def _filter_queue_playlist_items(playlist_items, query):
     """Filter indexed VLC playlist entries while preserving their original positions."""
-    query_tokens = re.findall(r"\\w+", str(query or "").casefold())
+    query_tokens = re.findall(r"\w+", str(query or "").casefold())
     if not query_tokens:
         return list(playlist_items)
 
@@ -3418,7 +3418,7 @@ def _filter_queue_playlist_items(playlist_items, query):
             str(item.get(field) or "")
             for field in ("name", "uri")
         ).casefold()
-        searchable_tokens = re.findall(r"\\w+", searchable)
+        searchable_tokens = re.findall(r"\w+", searchable)
         searchable_text = " ".join(searchable_tokens)
         if query_text in searchable_text or all(
             token in searchable_tokens for token in query_tokens
