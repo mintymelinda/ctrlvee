@@ -2075,6 +2075,12 @@ class PlaybackCommands(commands.Cog):
                     recovery = await self.vlc.run_async(
                         "resume_selected_item_if_current", item_id, resume=False
                     )
+                    if recovery["reason"] == "selection_changed":
+                        logger.info(
+                            "Skipping playback announcement for item %s; VLC selection changed",
+                            item_id,
+                        )
+                        return
 
                 # Announce now playing via unified announcer
                 await self._announce_now_playing('command', item, number)
