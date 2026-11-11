@@ -20,6 +20,7 @@ Current app version: `1.9.18`.
 - Python `3.10+`
 - VLC Media Player with HTTP interface enabled
 - A Discord bot token
+- `discord.py[voice] 2.7.1+` for DAVE-compatible Discord voice connections
 - TMDB API key (recommended; required for full metadata features)
 
 ## Docker Deployment
