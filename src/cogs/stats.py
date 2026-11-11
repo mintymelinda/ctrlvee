@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import re
 from urllib.parse import unquote, urlparse
@@ -88,10 +87,9 @@ class StatsCommands(commands.Cog):
             viewers = {member.id: member.display_name for member in channel.members if not member.bot}
             if not viewers:
                 return
-            status = await asyncio.to_thread(self.vlc.get_status)
+            status, playlist = await self.vlc.run_async("get_playback_snapshot")
             if status is None or status.findtext("state") != "playing":
                 return
-            playlist = await asyncio.to_thread(self.vlc.get_playlist)
             leaves = playlist.findall(".//leaf") if playlist is not None else []
             item = next((leaf for leaf in leaves if leaf.get("current")), None)
             self.stats.record(

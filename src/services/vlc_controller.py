@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any
 import asyncio
+import threading
 import os
 import json
 import xml.etree.ElementTree as ET
@@ -36,6 +37,7 @@ class VLCController:
         self.logger = logging.getLogger(__name__)
         self.bot = bot
         self._async_operation_lock = asyncio.Lock()
+        self._operation_thread_lock = threading.RLock()
         
         # Queue management state
         self._queued_items = {}  # item_id -> queue_info
@@ -94,7 +96,15 @@ class VLCController:
         if not callable(method) or method_name.startswith("_"):
             raise ValueError(f"Unsupported VLC controller operation: {method_name}")
         async with self._async_operation_lock:
-            return await asyncio.to_thread(method, *args, **kwargs)
+            return await asyncio.to_thread(self.run_sync, method_name, *args, **kwargs)
+
+    def run_sync(self, method_name: str, *args, **kwargs):
+        """Run a synchronous controller operation under the shared cross-thread lock."""
+        method = getattr(self, method_name, None)
+        if not callable(method) or method_name.startswith("_"):
+            raise ValueError(f"Unsupported VLC controller operation: {method_name}")
+        with self._operation_thread_lock:
+            return method(*args, **kwargs)
 
     def get_playback_snapshot(self):
         """Read status and playlist as one serialized observation."""
