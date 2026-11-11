@@ -60,6 +60,8 @@ class PlaybackCommands(commands.Cog):
         self.last_known_playing_item = None  # Track the last item that was playing
         self.monitoring_task = None
         self._presence_progress_task = None
+        self._playback_panel_refresh_task = None
+        self._playback_panel_messages = {}
         self._last_command_announce_ts = 0.0
         self._suppress_auto_announce_until = 0.0
         self._last_announced_item_id = None
@@ -253,6 +255,9 @@ class PlaybackCommands(commands.Cog):
         self.bot.add_view(PlaybackControlView(self))
         self.monitoring_task = self.bot.loop.create_task(self._monitor_vlc_state())
         self.logger.info("VLC state monitoring started")
+        self._playback_panel_refresh_task = self.bot.loop.create_task(
+            self._playback_panel_refresh_loop()
+        )
         # Schedule a one-time startup presence sync (runs after the bot is ready)
         try:
             self.bot.loop.create_task(self._startup_presence_sync())
@@ -576,6 +581,9 @@ class PlaybackCommands(commands.Cog):
         if self._presence_progress_task:
             self._presence_progress_task.cancel()
             self.logger.info("Presence progress updater stopped")
+        if self._playback_panel_refresh_task:
+            self._playback_panel_refresh_task.cancel()
+            self.logger.info("Playback panel refresh updater stopped")
         if self.periodic_announce_task:
             self.periodic_announce_task.cancel()
             self.logger.info("Periodic announcement task stopped")
@@ -1939,6 +1947,46 @@ class PlaybackCommands(commands.Cog):
             return None
             
 
+    async def _refresh_playback_panels(self) -> None:
+        """Refresh registered panel messages without issuing playback commands."""
+        if not self._playback_panel_messages:
+            return
+
+        embed = await self._playback_panel_embed()
+        for message_id, message in list(self._playback_panel_messages.items()):
+            try:
+                await message.edit(embed=embed, view=PlaybackControlView(self))
+            except (discord.NotFound, discord.Forbidden):
+                self._playback_panel_messages.pop(message_id, None)
+            except discord.HTTPException:
+                self.logger.debug(
+                    "Could not refresh playback panel message %s", message_id
+                )
+
+    async def _playback_panel_refresh_loop(self) -> None:
+        """Keep active playback panel embeds current at a conservative interval."""
+        try:
+            await self.bot.wait_until_ready()
+        except Exception:
+            return
+
+        try:
+            interval = max(
+                15,
+                int(getattr(Config, "PLAYBACK_PANEL_REFRESH_INTERVAL", 30)),
+            )
+        except (TypeError, ValueError):
+            interval = 30
+
+        while not self.bot.is_closed():
+            await asyncio.sleep(interval)
+            try:
+                await self._refresh_playback_panels()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.logger.exception("Playback panel refresh failed")
+
     async def _playback_panel_embed(self) -> discord.Embed:
         """Build a video-first Now Playing embed for the interactive playback panel."""
         embed = await self.get_status_embed()
@@ -1990,10 +2038,12 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def playback_panel(self, ctx):
         """Post an interactive playback control panel."""
-        await ctx.send(
+        message = await ctx.send(
             embed=await self._playback_panel_embed(),
             view=PlaybackControlView(self),
         )
+        if message is not None and getattr(message, "id", None) is not None:
+            self._playback_panel_messages[message.id] = message
 
     @commands.command(name='play',aliases=['start','resume'])
     @commands.has_any_role(*Config.ALLOWED_ROLES)
