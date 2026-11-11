@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import asyncio
 import logging
+import json
 import os
 import re
 import xml.etree.ElementTree as ET
@@ -62,6 +63,7 @@ class PlaybackCommands(commands.Cog):
         self._presence_progress_task = None
         self._playback_panel_refresh_task = None
         self._playback_panel_messages = {}
+        self._playback_panel_registry_restored = False
         self._last_command_announce_ts = 0.0
         self._suppress_auto_announce_until = 0.0
         self._last_announced_item_id = None
@@ -1947,21 +1949,105 @@ class PlaybackCommands(commands.Cog):
             return None
             
 
+    def _playback_panel_registry_path(self) -> str:
+        """Return the local file used to persist panel channel/message IDs."""
+        return os.path.abspath(
+            os.path.expanduser(
+                str(getattr(Config, "PLAYBACK_PANEL_REGISTRY_PATH", "data/playback_panels.json"))
+            )
+        )
+
+    def _save_playback_panel_registry(self) -> None:
+        """Persist registered panel references atomically for the next restart."""
+        path = self._playback_panel_registry_path()
+        directory = os.path.dirname(path)
+        os.makedirs(directory, exist_ok=True)
+        entries = [
+            {"channel_id": int(message.channel.id), "message_id": int(message.id)}
+            for message in self._playback_panel_messages.values()
+            if getattr(message, "channel", None) is not None
+            and getattr(message.channel, "id", None) is not None
+            and getattr(message, "id", None) is not None
+        ]
+        temporary_path = f"{path}.tmp"
+        try:
+            with open(temporary_path, "w", encoding="utf-8") as registry_file:
+                json.dump(entries, registry_file, indent=2)
+                registry_file.write("\\n")
+            os.replace(temporary_path, path)
+        except OSError:
+            try:
+                if os.path.exists(temporary_path):
+                    os.remove(temporary_path)
+            except OSError:
+                pass
+            self.logger.exception("Could not persist playback panel registry")
+
+    async def _restore_playback_panel_registry(self) -> None:
+        """Resolve previously registered panel messages after Discord is ready."""
+        if self._playback_panel_registry_restored:
+            return
+        self._playback_panel_registry_restored = True
+        path = self._playback_panel_registry_path()
+        try:
+            with open(path, "r", encoding="utf-8") as registry_file:
+                entries = json.load(registry_file)
+        except FileNotFoundError:
+            return
+        except (OSError, json.JSONDecodeError):
+            self.logger.exception("Could not read playback panel registry")
+            return
+
+        if not isinstance(entries, list):
+            self.logger.warning("Ignoring invalid playback panel registry format")
+            return
+
+        restored = {}
+        for entry in entries:
+            try:
+                channel_id = int(entry["channel_id"])
+                message_id = int(entry["message_id"])
+                channel = self.bot.get_channel(channel_id)
+                if channel is None:
+                    channel = await self.bot.fetch_channel(channel_id)
+                message = await channel.fetch_message(message_id)
+                if getattr(getattr(message, "author", None), "id", None) != getattr(self.bot.user, "id", None):
+                    continue
+                embeds = getattr(message, "embeds", ())
+                if not embeds or not str(getattr(embeds[0], "footer", {}).text or "").startswith(
+                    "Video playback controls and queue overview."
+                ):
+                    continue
+                restored[message_id] = message
+            except (KeyError, TypeError, ValueError, discord.NotFound, discord.Forbidden):
+                continue
+            except discord.HTTPException:
+                self.logger.debug("Could not restore playback panel message %s", entry)
+            except Exception:
+                self.logger.exception("Unexpected error restoring playback panel %s", entry)
+
+        self._playback_panel_messages.update(restored)
+        self._save_playback_panel_registry()
+
     async def _refresh_playback_panels(self) -> None:
         """Refresh registered panel messages without issuing playback commands."""
         if not self._playback_panel_messages:
             return
 
         embed = await self._playback_panel_embed()
+        registry_changed = False
         for message_id, message in list(self._playback_panel_messages.items()):
             try:
                 await message.edit(embed=embed, view=PlaybackControlView(self))
             except (discord.NotFound, discord.Forbidden):
                 self._playback_panel_messages.pop(message_id, None)
+                registry_changed = True
             except discord.HTTPException:
                 self.logger.debug(
                     "Could not refresh playback panel message %s", message_id
                 )
+        if registry_changed:
+            self._save_playback_panel_registry()
 
     async def _playback_panel_refresh_loop(self) -> None:
         """Keep active playback panel embeds current at a conservative interval."""
@@ -1977,6 +2063,12 @@ class PlaybackCommands(commands.Cog):
             )
         except (TypeError, ValueError):
             interval = 30
+
+        await self._restore_playback_panel_registry()
+        try:
+            await self._refresh_playback_panels()
+        except Exception:
+            self.logger.exception("Initial playback panel refresh failed")
 
         while not self.bot.is_closed():
             await asyncio.sleep(interval)
@@ -2044,6 +2136,7 @@ class PlaybackCommands(commands.Cog):
         )
         if message is not None and getattr(message, "id", None) is not None:
             self._playback_panel_messages[message.id] = message
+            self._save_playback_panel_registry()
 
     @commands.command(name='play',aliases=['start','resume'])
     @commands.has_any_role(*Config.ALLOWED_ROLES)
