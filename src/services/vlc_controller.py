@@ -1988,7 +1988,8 @@ class VLCController:
         queue_info = self._queued_items[item_id]
         should_restore_shuffle = queue_info.get("restore_shuffle", False)
         
-        # Remove from the main queue and keep displayed positions contiguous.
+        # Remove the entry and its completion marker, preserving the obligation
+        # to restore shuffle if this was the final shuffle-managed queue item.
         del self._queued_items[item_id]
         self._shuffle_restore_queue = [
             queued_id for queued_id in self._shuffle_restore_queue
@@ -1999,12 +2000,21 @@ class VLCController:
             self._pending_queue_item_id = None
             self._pending_queue_started_at = None
         self.logger.debug(f"Removed item {item_id} from queue")
-        
-        # If the queue is now empty, clear the shuffle restore queue too
-        if len(self._queued_items) == 0:
+
+        if self._queued_items and should_restore_shuffle:
+            last_item_id, last_item = max(
+                self._queued_items.items(),
+                key=lambda entry: entry[1].get("queue_order", 0),
+            )
+            last_item["restore_shuffle"] = True
+            if last_item_id not in self._shuffle_restore_queue:
+                self._shuffle_restore_queue.append(last_item_id)
+        elif not self._queued_items:
+            if should_restore_shuffle:
+                self.restore_shuffle_if_needed(True)
             self._shuffle_restore_queue.clear()
             self.logger.debug("Queue is empty - cleared shuffle restore queue")
-        
+
         # Save the updated queue state
         self._save_queue_backup()
         self.logger.debug(f"Queue state saved after removing item {item_id}")
