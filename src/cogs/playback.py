@@ -1957,23 +1957,23 @@ class PlaybackCommands(commands.Cog):
             )
         )
 
-    def _save_playback_panel_registry(self) -> None:
+    def _save_playback_panel_registry(self, extra_entries=None) -> None:
         """Persist registered panel references atomically for the next restart."""
         path = self._playback_panel_registry_path()
-        directory = os.path.dirname(path)
-        os.makedirs(directory, exist_ok=True)
-        entries = [
-            {"channel_id": int(message.channel.id), "message_id": int(message.id)}
-            for message in self._playback_panel_messages.values()
-            if getattr(message, "channel", None) is not None
-            and getattr(message.channel, "id", None) is not None
-            and getattr(message, "id", None) is not None
-        ]
         temporary_path = f"{path}.tmp"
         try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            entries = [
+                {"channel_id": int(message.channel.id), "message_id": int(message.id)}
+                for message in self._playback_panel_messages.values()
+                if getattr(message, "channel", None) is not None
+                and getattr(message.channel, "id", None) is not None
+                and getattr(message, "id", None) is not None
+            ]
+            entries.extend(extra_entries or [])
             with open(temporary_path, "w", encoding="utf-8") as registry_file:
                 json.dump(entries, registry_file, indent=2)
-                registry_file.write("\\n")
+                registry_file.write("\n")
             os.replace(temporary_path, path)
         except OSError:
             try:
@@ -2003,6 +2003,7 @@ class PlaybackCommands(commands.Cog):
             return
 
         restored = {}
+        unresolved = []
         for entry in entries:
             try:
                 channel_id = int(entry["channel_id"])
@@ -2023,11 +2024,12 @@ class PlaybackCommands(commands.Cog):
                 continue
             except discord.HTTPException:
                 self.logger.debug("Could not restore playback panel message %s", entry)
+                unresolved.append(entry)
             except Exception:
                 self.logger.exception("Unexpected error restoring playback panel %s", entry)
 
         self._playback_panel_messages.update(restored)
-        self._save_playback_panel_registry()
+        self._save_playback_panel_registry(extra_entries=unresolved)
 
     async def _refresh_playback_panels(self) -> None:
         """Refresh registered panel messages without issuing playback commands."""
