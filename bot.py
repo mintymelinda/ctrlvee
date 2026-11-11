@@ -593,15 +593,7 @@ async def on_voice_state_update(member, before, after):
 
         logger.info(f"Bot was disconnected from voice. Attempting reconnect... (Attempt {_reconnect_attempts + 1}/{_MAX_RECONNECTS})")
 
-        # Clean up any existing client in this guild
-        try:
-            if before and before.channel:
-                existing = discord.utils.get(bot.voice_clients, guild=before.channel.guild)
-                if existing:
-                    await existing.disconnect(force=True)
-                    await asyncio.sleep(1)
-        except Exception:
-            pass
+        # The join helpers clean up stale clients while holding the shared voice lock.
 
         # Prefer the last command-selected channel; fall back to the configured startup channel.
         target_channel = (
