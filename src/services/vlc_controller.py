@@ -318,37 +318,20 @@ class VLCController:
         """Read status and playlist as one serialized observation."""
         return self.get_status(), self.get_playlist()
 
-    def play_scheduled_item_if_unchanged(self, item_id, expected_current_item_id):
-        """Play a scheduled item only while its preflight selection is still current."""
-        playlist = self.get_playlist()
-        if playlist is None:
-            return {"success": False, "confirmed": False, "reason": "playback_unavailable"}
-        current, _ = self._current_playlist_item(playlist)
-        current_id = current.get("id") if current is not None else None
-        if str(current_id) != str(expected_current_item_id):
-            return {"success": False, "confirmed": False, "reason": "playback_changed", "current_item_id": current_id}
-        target = next(
-            (item for item in playlist.findall(".//leaf") if str(item.get("id")) == str(item_id)),
-            None,
-        )
-        if target is None:
-            return {"success": False, "confirmed": False, "reason": "item_not_found"}
+    def play_item_and_confirm(self, item_id):
+        """Capture the source item, play the target, and confirm it atomically."""
+        previous_playlist = self.get_playlist()
+        previous_item, _ = self._current_playlist_item(previous_playlist)
+        source_item_id = previous_item.get("id") if previous_item is not None else None
+
         result = self.play_item(item_id)
         if result is None or result is False:
-            return {"success": False, "confirmed": False, "reason": "play_command_failed"}
-        status = self.get_status()
-        confirmed_playlist = self.get_playlist()
-        confirmed_item, _ = self._current_playlist_item(confirmed_playlist)
-        confirmed = bool(
-            status is not None and status.findtext("state") == "playing"
-            and confirmed_item is not None and str(confirmed_item.get("id")) == str(item_id)
-        )
-        return {
-            "success": True, "confirmed": confirmed,
-            "reason": "confirmed" if confirmed else "awaiting_confirmation",
-            "item_id": str(item_id),
-            "source_item_id": str(current_id) if current_id is not None else None,
-        }
+            return result, False, source_item_id
+
+        playlist = self.get_playlist()
+        current, _ = self._current_playlist_item(playlist)
+        confirmed = current is not None and str(current.get("id")) == str(item_id)
+        return result, confirmed, source_item_id
 
     def send_command(self, command: str, params: Optional[Dict[str, str]] = None) -> Optional[ET.Element]:
         """Send command to VLC HTTP interface

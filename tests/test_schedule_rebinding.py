@@ -76,23 +76,51 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._schedule_locks = {}
         scheduler._save_schedule_backup = Mock()
         async def run_async(method_name, *args, **kwargs):
-            if method_name == "play_item_and_confirm":
-                previous = vlc.get_playlist()
-                previous_item = next(
-                    (item for item in previous.findall(".//leaf") if item.get("current") is not None),
-                    None,
-                ) if isinstance(previous, ET.Element) else None
-                result = vlc.play_item(*args, **kwargs)
+            if method_name == "get_playback_snapshot":
                 playlist = vlc.get_playlist()
+                if not isinstance(playlist, ET.Element):
+                    playlist = ET.Element("playlist")
+                return ET.fromstring("<root><state>playing</state></root>"), playlist
+            if method_name == "get_current_item_if_unchanged":
+                playlist = vlc.get_playlist()
+                if not isinstance(playlist, ET.Element):
+                    return {"success": False, "reason": "playback_unavailable"}
                 current = next(
                     (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
                     None,
-                ) if isinstance(playlist, ET.Element) else None
-                return (
-                    result,
-                    bool(current is not None and str(current.get("id")) == str(args[0])),
-                    previous_item.get("id") if previous_item is not None else None,
                 )
+                if current is None or str(current.get("id")) != str(args[0]):
+                    return {"success": False, "reason": "selection_changed"}
+                return {"success": True, "reason": "confirmed", "state": "playing", "item_id": args[0]}
+            if method_name == "play_scheduled_item_if_unchanged":
+                item_id, expected_id = args
+                playlist = vlc.get_playlist()
+                if not isinstance(playlist, ET.Element):
+                    playlist = ET.Element("playlist")
+                    if expected_id is not None:
+                        current = leaf(str(expected_id))
+                        current.set("current", "current")
+                        playlist.append(current)
+                    playlist.append(leaf(str(item_id)))
+                current = next(
+                    (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
+                    None,
+                )
+                current_id = current.get("id") if current is not None else None
+                if str(current_id) != str(expected_id):
+                    return {"success": False, "confirmed": False, "reason": "playback_changed"}
+                result = vlc.play_item(item_id)
+                current = next(
+                    (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
+                    None,
+                )
+                confirmed = current is not None and str(current.get("id")) == str(item_id)
+                return {
+                    "success": result is not None and result is not False,
+                    "confirmed": confirmed,
+                    "reason": "confirmed" if confirmed else "awaiting_confirmation",
+                    "source_item_id": current_id,
+                }
             return getattr(vlc, method_name)(*args, **kwargs)
         vlc.run_async = AsyncMock(side_effect=run_async)
         return scheduler
