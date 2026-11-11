@@ -106,7 +106,7 @@ class PlaybackCommands(commands.Cog):
     def _current_stream_item_id(self) -> str | None:
         """Return the VLC playlist ID currently playing, if any."""
         try:
-            status = await self.vlc.run_async("get_status")
+            status = self.vlc.get_status()
             if status is None:
                 return None
             state_element = status.find("state")
