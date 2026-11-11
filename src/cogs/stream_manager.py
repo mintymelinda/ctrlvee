@@ -188,6 +188,12 @@ class StreamManagerCommands(commands.Cog):
             # A returning manager gets a fresh check on the next monitor tick.
             self._alerted_guilds.discard(member.guild.id)
 
+    @commands.Cog.listener()
+    async def on_member_join(self, member):
+        assignment = self._assignment(member.guild)
+        if assignment and member.id == assignment["user_id"]:
+            self._alerted_guilds.discard(member.guild.id)
+
     @commands.command(name="stream_manager", aliases=["streammanager"])
     @commands.guild_only()
     async def stream_manager(self, ctx, action: str = "status", member: discord.Member = None):
