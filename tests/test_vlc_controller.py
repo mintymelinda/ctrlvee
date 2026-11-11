@@ -98,6 +98,85 @@ class VLCControllerTests(unittest.TestCase):
         self.assertTrue(result["enabled"])
         toggle.assert_called_once_with()
 
+    def test_monitor_queue_play_revalidates_state_and_current_item_before_playing(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": False}
+        }
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="current" current="current"/></playlist>')
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ), patch.object(self.controller, "play_item_by_id", return_value=True) as play, patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ):
+            result = self.controller.play_queued_item_if_monitor_state(
+                "playing", expected_current_item_id="current"
+            )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["attempted"])
+        self.assertEqual(result["reason"], "played")
+        play.assert_called_once_with("queued")
+
+    def test_monitor_queue_play_ignores_stale_state_observation(self):
+        status = ET.fromstring("<root><state>paused</state></root>")
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist"
+        ) as get_playlist, patch.object(self.controller, "play_next_queued_item") as play:
+            result = self.controller.play_queued_item_if_monitor_state("playing")
+
+        self.assertFalse(result["attempted"])
+        self.assertEqual(result["reason"], "state_changed")
+        get_playlist.assert_not_called()
+        play.assert_not_called()
+
+    def test_monitor_queue_play_ignores_stale_current_item_observation(self):
+        status = ET.fromstring("<root><state>playing</state></root>")
+        playlist = ET.fromstring('<playlist><leaf id="new-manual-item" current="current"/></playlist>')
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "get_playlist", return_value=playlist
+        ), patch.object(self.controller, "play_next_queued_item") as play:
+            result = self.controller.play_queued_item_if_monitor_state(
+                "playing", expected_current_item_id="old-item"
+            )
+
+        self.assertFalse(result["attempted"])
+        self.assertEqual(result["reason"], "current_item_changed")
+        play.assert_not_called()
+
+    def test_monitor_queue_play_requires_paused_item_to_be_at_end(self):
+        status = ET.fromstring(
+            "<root><state>paused</state><time>40</time><length>120</length></root>"
+        )
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "play_next_queued_item"
+        ) as play:
+            result = self.controller.play_queued_item_if_monitor_state(
+                "paused", require_end=True
+            )
+
+        self.assertFalse(result["attempted"])
+        self.assertEqual(result["reason"], "not_at_end")
+        play.assert_not_called()
+
+    def test_monitor_queue_play_starts_queued_item_when_paused_at_end(self):
+        self.controller._queued_items = {
+            "queued": {"item_name": "Queued", "queue_order": 1, "restore_shuffle": False}
+        }
+        status = ET.fromstring(
+            "<root><state>paused</state><time>118</time><length>120</length></root>"
+        )
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "play_item_by_id", return_value=True
+        ) as play, patch.object(self.controller, "get_shuffle_state", return_value=False):
+            result = self.controller.play_queued_item_if_monitor_state(
+                "paused", require_end=True
+            )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["attempted"])
+        play.assert_called_once_with("queued")
+
     def test_queue_backup_round_trip_preserves_both_queue_structures(self):
         self.controller._queued_items = {
             "17": {
