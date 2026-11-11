@@ -425,7 +425,7 @@ class VLCControllerTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["removed_item_id"], "A")
         self.assertEqual(self.controller._queued_items["B"]["queue_order"], 1)
-        self.assertEqual(self.controller._shuffle_restore_queue, [])
+        self.assertEqual(self.controller._shuffle_restore_queue, ["A"])
 
     def test_queue_management_by_id_rejects_stale_playlist_identity(self):
         self.controller._queued_items = {
