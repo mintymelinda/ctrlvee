@@ -55,6 +55,20 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
             {"Confirm Clear", "Cancel"},
         )
 
+    async def test_clear_queue_confirmation_rechecks_playback_role(self):
+        view = QueueClearConfirmView(Mock())
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(roles=[]),
+            response=SimpleNamespace(send_message=AsyncMock()),
+        )
+        with patch.object(Config, "ALLOWED_ROLES", ["DJ"]):
+            allowed = await view.interaction_check(interaction)
+        self.assertFalse(allowed)
+        interaction.response.send_message.assert_awaited_once_with(
+            "You don't have a role permitted to control playback.",
+            ephemeral=True,
+        )
+
     async def test_confirm_clear_queue_checks_voice_room_before_mutating(self):
         cog = Mock()
         cog._playback_guard = AsyncMock(return_value=(False, "Join the listening room"))
