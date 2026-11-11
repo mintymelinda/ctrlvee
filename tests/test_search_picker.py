@@ -49,3 +49,42 @@ class SearchPickerTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueuePickerSearchTests(unittest.TestCase):
+    def _items(self):
+        return [
+            (1, {"id": "11", "name": "Futurama S01E01.mkv"}),
+            (2, {"id": "12", "name": "The Simpsons S02E03.mkv"}),
+            (3, {"id": "13", "name": "Futurama S01E02.mkv", "uri": "file:///media/Comedy/"}),
+            (4, {"id": "14", "name": "Movie.mkv", "uri": "file:///media/Drama/Arrival.mkv"}),
+        ]
+
+    def test_search_filters_titles_without_changing_playlist_positions(self):
+        from src.cogs.playback import _filter_queue_playlist_items
+
+        results = _filter_queue_playlist_items(self._items(), "futurama")
+        self.assertEqual([position for position, _ in results], [1, 3])
+        self.assertEqual([item["id"] for _, item in results], ["11", "13"])
+
+    def test_search_matches_filename_path_and_multiple_terms(self):
+        from src.cogs.playback import _filter_queue_playlist_items
+
+        results = _filter_queue_playlist_items(self._items(), "media arrival")
+        self.assertEqual([position for position, _ in results], [4])
+
+    def test_empty_search_restores_all_playlist_items(self):
+        from src.cogs.playback import _filter_queue_playlist_items
+
+        self.assertEqual(
+            _filter_queue_playlist_items(self._items(), ""),
+            self._items(),
+        )
+
+    def test_no_match_returns_empty_results(self):
+        from src.cogs.playback import _filter_queue_playlist_items
+
+        self.assertEqual(
+            _filter_queue_playlist_items(self._items(), "nonexistent title"),
+            [],
+        )
