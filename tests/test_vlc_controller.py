@@ -370,6 +370,49 @@ class VLCControllerTests(unittest.TestCase):
 
         self.assertEqual(path, "/media/Some Show/Episode 1.mkv")
 
+    def test_move_queue_item_by_order_reorders_and_persists_without_changing_shuffle_restore(self):
+        self.controller._queued_items = {
+            "A": {"item_name": "Alpha", "queue_order": 1, "restore_shuffle": True},
+            "B": {"item_name": "Bravo", "queue_order": 2, "restore_shuffle": False},
+            "C": {"item_name": "Charlie", "queue_order": 3, "restore_shuffle": True},
+        }
+        self.controller._shuffle_restore_queue = ["A", "C"]
+
+        result = self.controller.move_queue_item_by_order(3, "up")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["item_id"], "C")
+        self.assertEqual(result["queue_order"], 2)
+        self.assertEqual(self.controller._queued_items["B"]["queue_order"], 3)
+        self.assertEqual(self.controller._shuffle_restore_queue, ["A", "C"])
+
+        restored = VLCController(
+            host="127.0.0.1",
+            port=8080,
+            password="test-password",
+            queue_backup_file=str(self.backup_path),
+        )
+        self.assertEqual(restored._queued_items, self.controller._queued_items)
+        self.assertEqual(restored._shuffle_restore_queue, ["A", "C"])
+
+    def test_move_queue_item_by_order_rejects_invalid_direction_and_queue_boundaries(self):
+        self.controller._queued_items = {
+            "A": {"item_name": "Alpha", "queue_order": 1},
+            "B": {"item_name": "Bravo", "queue_order": 2},
+        }
+
+        invalid_direction = self.controller.move_queue_item_by_order(1, "sideways")
+        at_top = self.controller.move_queue_item_by_order(1, "up")
+        at_bottom = self.controller.move_queue_item_by_order(2, "down")
+
+        self.assertFalse(invalid_direction["success"])
+        self.assertFalse(at_top["success"])
+        self.assertFalse(at_bottom["success"])
+        self.assertEqual(
+            [item["queue_order"] for item in self.controller._queued_items.values()],
+            [1, 2],
+        )
+
     def test_queue_order_is_compacted_after_removal_and_insertion(self):
         self.queue_item("A")
         self.queue_item("B")
