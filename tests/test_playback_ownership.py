@@ -57,7 +57,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         select = next(child for child in view.children if hasattr(child, "options"))
         labels = {child.label for child in view.children if hasattr(child, "label")}
 
-        self.assertEqual([option.value for option in select.options], ["1", "2", "3"])
+        self.assertEqual([option.value for option in select.options], ["first", "second", "third"])
         self.assertIn("First Track", select.options[0].label)
         self.assertIn("Second Track", select.options[1].label)
         self.assertIn("Third Track", select.options[2].label)
