@@ -270,7 +270,7 @@ class PlaybackCommands(commands.Cog):
             # Small delay to allow VLC HTTP status to stabilize after connect
             await asyncio.sleep(0.4)
 
-            status = self.vlc.get_status()
+            status = await self.vlc.run_async("get_status")
             if status is None:
                 return
 
@@ -623,7 +623,7 @@ class PlaybackCommands(commands.Cog):
                         await asyncio.sleep(interval)
                         continue
                     
-                    status = self.vlc.get_status()
+                    status = await self.vlc.run_async("get_status")
                     if status and status.find('state').text == 'playing':
                         self.logger.info("VLC is playing, preparing periodic announcement...")
                         embed = await self.get_status_embed()
@@ -671,7 +671,7 @@ class PlaybackCommands(commands.Cog):
 
                 status = None
                 try:
-                    status = self.vlc.get_status()
+                    status = await self.vlc.run_async("get_status")
                 except Exception:
                     status = None
 
@@ -898,7 +898,7 @@ class PlaybackCommands(commands.Cog):
         await self.bot.wait_until_ready()
         while not self.bot.is_closed():
             try:
-                status = self.vlc.get_status()
+                status, playlist = await self.vlc.run_async("get_playback_snapshot")
                 if status:
                     current_state = status.find('state').text
                     # If VLC is stopped, clear the bot's presence (throttled)
@@ -921,7 +921,6 @@ class PlaybackCommands(commands.Cog):
                         pass
                     
                     # Get current position and item from playlist
-                    playlist = self.vlc.get_playlist()
                     current_position = None
                     current_item = None
                     if playlist is not None:
@@ -939,14 +938,14 @@ class PlaybackCommands(commands.Cog):
                             # Priority 1: Handle position changes (track transitions)
                             if position_changed and current_item_id:
                                 # Check if there's a queue and this is a natural track progression
-                                next_queued = self.vlc.get_next_queued_item()
+                                next_queued = await self.vlc.run_async("get_next_queued_item")
                                 if next_queued:
                                     # There's a queued item - check if the current track is NOT the queued item
                                     if current_item_id != next_queued['item_id']:
                                         if self._check_queue_auto_play_cooldown():
                                             logger.info(f"Track changed to {current_item_id} but we have queued item {next_queued['item_id']} - interrupting to play queued item")
                                             try:
-                                                play_result = self.vlc.play_next_queued_item()
+                                                play_result = await self.vlc.run_async("play_next_queued_item")
                                                 logger.info(f"Auto-play result: {play_result}")
                                                 
                                                 if play_result.get("success"):
@@ -969,18 +968,18 @@ class PlaybackCommands(commands.Cog):
                             
                             # Priority 2: For state changes to stopped OR paused, check if we should auto-play next queued item
                             # (movies often go to paused state when they end, not stopped)
-                            elif state_changed and current_state in ['stopped', 'paused'] and self.vlc.get_next_queued_item():
+                            elif state_changed and current_state in ['stopped', 'paused'] and await self.vlc.run_async("get_next_queued_item"):
                                 if self._check_queue_auto_play_cooldown():
                                     try:
                                         logger.info(f"Track {current_state} - checking for next queued item to auto-play")
-                                        next_queued = self.vlc.get_next_queued_item()
+                                        next_queued = await self.vlc.run_async("get_next_queued_item")
                                         logger.info(f"Next queued item found: {next_queued}")
                                         
                                         # Additional check: if paused, make sure we're actually at the end
                                         should_auto_play = True
                                         if current_state == 'paused':
                                             try:
-                                                status = self.vlc.get_status()
+                                                status = await self.vlc.run_async("get_status")
                                                 if status is not None:
                                                     time_elem = status.find('time')
                                                     length_elem = status.find('length')
@@ -995,7 +994,7 @@ class PlaybackCommands(commands.Cog):
                                                 logger.debug(f"Could not check time position: {e}")
                                         
                                         if should_auto_play:
-                                            play_result = self.vlc.play_next_queued_item()
+                                            play_result = await self.vlc.run_async("play_next_queued_item")
                                             logger.info(f"Auto-play result: {play_result}")
                                             
                                             if play_result.get("success"):
@@ -1026,7 +1025,7 @@ class PlaybackCommands(commands.Cog):
                             if position_changed and current_item_id:
                                 try:
                                     # Check for queue transitions and shuffle restoration
-                                    queue_result = self.vlc.check_and_handle_queue_transition(current_item_id)
+                                    queue_result = await self.vlc.run_async("check_and_handle_queue_transition", current_item_id)
                                     
                                     # Log any queue transitions
                                     if queue_result.get("transitions"):
@@ -1053,10 +1052,10 @@ class PlaybackCommands(commands.Cog):
                                 if last_item_id and last_item_id != current_item_id:
                                     # The last playing item is no longer playing - it finished
                                     try:
-                                        self.vlc._handle_queued_item_finished(last_item_id)
+                                        await self.vlc.run_async("finish_queued_item", last_item_id)
                                         # Ensure playback rate is reset to normal after an item finishes
                                         try:
-                                            self.vlc.set_rate(1.0)
+                                            await self.vlc.run_async("set_rate", 1.0)
                                             logger.debug("Playback rate reset to 1.0 after item finished")
                                         except Exception as e:
                                             logger.debug(f"Failed to reset playback rate after finish: {e}")
@@ -1109,12 +1108,12 @@ class PlaybackCommands(commands.Cog):
                     self.last_known_playing_item = current_item  # Track the current playing item
                     
                     # Priority 3: End-of-track detection - check if current track is about to end
-                    if current_state in ['playing', 'paused'] and self.vlc.get_next_queued_item():
+                    if current_state in ['playing', 'paused'] and await self.vlc.run_async("get_next_queued_item"):
                         # This check is to see if we are near the end of the media.
                         # If we are, we can be more aggressive about checking for the next item.
                         # This helps in cases where the state change to 'stopped' is delayed.
                         try:
-                            status = self.vlc.get_status()
+                            status = await self.vlc.run_async("get_status")
                             if status is not None:
                                 time_elem = status.find('time')
                                 length_elem = status.find('length')
@@ -1133,8 +1132,8 @@ class PlaybackCommands(commands.Cog):
                     # If VLC pauses at the very end of a track (common behavior) and there's no queued item,
                     # clear presence to avoid showing a stale title
                     try:
-                        if current_state == 'paused' and not self.vlc.get_next_queued_item():
-                            status = self.vlc.get_status()
+                        if current_state == 'paused' and not await self.vlc.run_async("get_next_queued_item"):
+                            status = await self.vlc.run_async("get_status")
                             if status is not None:
                                 time_elem = status.find('time')
                                 length_elem = status.find('length')
@@ -1149,7 +1148,7 @@ class PlaybackCommands(commands.Cog):
                         logger.debug(f"Paused-end presence clear check failed: {e}")
                     
                     # Enhanced periodic check: If we have queued items, ensure they get played
-                    next_queued = self.vlc.get_next_queued_item()
+                    next_queued = await self.vlc.run_async("get_next_queued_item")
                     if next_queued:
                         # Case 1: VLC is stopped and we have queued items
                         if current_state == 'stopped':
@@ -1217,7 +1216,7 @@ class PlaybackCommands(commands.Cog):
         Usage examples are shown with the configured prefix in `!!controls`.
         """
         try:
-            status = self.vlc.get_status()
+            status = await self.vlc.run_async("get_status")
             if not status:
                 await ctx.send('Error: Could not access VLC status')
                 return
@@ -1684,7 +1683,7 @@ class PlaybackCommands(commands.Cog):
     async def get_status_embed(self):
         """Generate a rich embed for the current VLC status."""
         try:
-            status = self.vlc.get_status()
+            status = await self.vlc.run_async("get_status")
             if not status:
                 return None
 
@@ -1868,7 +1867,7 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
 
-        status = self.vlc.get_status()
+        status = await self.vlc.run_async("get_status")
         if not status:
             await ctx.send('Error: Could not access VLC')
             return
@@ -1879,7 +1878,7 @@ class PlaybackCommands(commands.Cog):
 
         if self.vlc.play():
             await asyncio.sleep(0.5)
-            new_status = self.vlc.get_status()
+            new_status = await self.vlc.run_async("get_status")
             if new_status and new_status.find('state').text == 'playing':
                 guild_id = str(ctx.guild.id) if ctx.guild else 'dm'
                 self.last_state_change[guild_id] = asyncio.get_event_loop().time()
@@ -1898,7 +1897,7 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
 
-        status = self.vlc.get_status()
+        status = await self.vlc.run_async("get_status")
         if not status:
             await ctx.send('Error: Could not access VLC')
             return
@@ -1909,7 +1908,7 @@ class PlaybackCommands(commands.Cog):
 
         if self.vlc.pause():
             await asyncio.sleep(0.5)
-            new_status = self.vlc.get_status()
+            new_status = await self.vlc.run_async("get_status")
             if new_status and new_status.find('state').text == 'paused':
                 guild_id = str(ctx.guild.id) if ctx.guild else 'dm'
                 self.last_state_change[guild_id] = asyncio.get_event_loop().time()
@@ -2053,7 +2052,7 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send(f'Loading item #{number}...')
                 await asyncio.sleep(3)  # Give VLC time to load and start playing the file
                 
-                status = self.vlc.get_status()
+                status = await self.vlc.run_async("get_status")
                 if not status:
                     await ctx.send(f'Started playing item #{number}')
                     return
@@ -2063,7 +2062,7 @@ class PlaybackCommands(commands.Cog):
                     # If not playing yet, try to start playback
                     self.vlc.play()
                     await asyncio.sleep(2)
-                    status = self.vlc.get_status()
+                    status = await self.vlc.run_async("get_status")
                     if status:
                         state = status.find('state').text
                         if state != 'playing':
@@ -2075,7 +2074,7 @@ class PlaybackCommands(commands.Cog):
                 await self._announce_now_playing('command', item, number)
                 
                 # Verify it's actually playing
-                status = self.vlc.get_status()
+                status = await self.vlc.run_async("get_status")
                 if status and status.find('state').text != 'playing':
                     await ctx.send(f"Warning: VLC might not be playing. Try using {format_cmd_inline('play')} if playback doesn't start.")
             else:
@@ -2096,7 +2095,7 @@ class PlaybackCommands(commands.Cog):
             return
 
         # First check if there are any queued items to play
-        next_queued = self.vlc.get_next_queued_item()
+        next_queued = await self.vlc.run_async("get_next_queued_item")
         if next_queued:
             logger.info(f"Playing next queued item: {next_queued['item_name']}")
             result = self.vlc.play_next_queued_item()
@@ -2134,7 +2133,7 @@ class PlaybackCommands(commands.Cog):
                 pass
             await asyncio.sleep(3)  # Give VLC time to load and start playing the file
             
-            status = self.vlc.get_status()
+            status = await self.vlc.run_async("get_status")
             if not status:
                 await ctx.send('Skipped to next track')
                 return
@@ -2143,7 +2142,7 @@ class PlaybackCommands(commands.Cog):
             if state != 'playing':
                 # If not playing yet, wait a bit longer
                 await asyncio.sleep(2)
-                status = self.vlc.get_status()
+                status = await self.vlc.run_async("get_status")
             
             playlist = self.vlc.get_playlist()
             if status and playlist:
@@ -2182,7 +2181,7 @@ class PlaybackCommands(commands.Cog):
                 pass
             await asyncio.sleep(3)  # Give VLC time to load and start playing the file
             
-            status = self.vlc.get_status()
+            status = await self.vlc.run_async("get_status")
             if not status:
                 await ctx.send('Jumped to previous track')
                 return
@@ -2191,7 +2190,7 @@ class PlaybackCommands(commands.Cog):
             if state != 'playing':
                 # If not playing yet, wait a bit longer
                 await asyncio.sleep(2)
-                status = self.vlc.get_status()
+                status = await self.vlc.run_async("get_status")
             
             playlist = self.vlc.get_playlist()
             if status and playlist:
@@ -2229,7 +2228,7 @@ class PlaybackCommands(commands.Cog):
             bool: True if VLC is accessible, False if not
         """
         try:
-            status = self.vlc.get_status()
+            status = await self.vlc.run_async("get_status")
             if not status:
                 logger.error("Could not access VLC - HTTP interface may not be enabled")
                 await ctx.send('Error: Could not access VLC. Make sure VLC is running with HTTP interface enabled.')
@@ -2306,7 +2305,7 @@ class PlaybackCommands(commands.Cog):
             return
         # Use formatting helper for commands
             
-        status = self.vlc.get_status()
+        status = await self.vlc.run_async("get_status")
             
         state = status.find('state').text
         current = status.find('information')

@@ -75,6 +75,17 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._schedule_lock = asyncio.Lock()
         scheduler._schedule_locks = {}
         scheduler._save_schedule_backup = Mock()
+        async def run_async(method_name, *args, **kwargs):
+            if method_name == "play_item_and_confirm":
+                result = vlc.play_item(*args, **kwargs)
+                playlist = vlc.get_playlist()
+                current = next(
+                    (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
+                    None,
+                ) if playlist is not None else None
+                return result, bool(current is not None and str(current.get("id")) == str(args[0]))
+            return getattr(vlc, method_name)(*args, **kwargs)
+        vlc.run_async = AsyncMock(side_effect=run_async)
         return scheduler
 
     def make_schedule(self, **updates):
@@ -142,7 +153,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         finally:
             os.unlink(backup_path)
 
-    def test_rebind_updates_schedule_and_persists_new_playlist_identity(self):
+    async def test_rebind_updates_schedule_and_persists_new_playlist_identity(self):
         schedule = self.make_schedule(number=1)
         original = leaf("Heat (1995).mkv")
         shifted = leaf("Alien (1979).mkv")
@@ -154,14 +165,14 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._uri_exists = Mock(return_value=True)
         scheduler._save_schedule_backup.return_value = True
 
-        resolved = scheduler._rebind_due_schedules(datetime.now(PH_TZ))
+        resolved = await scheduler._rebind_due_schedules(datetime.now(PH_TZ))
 
         self.assertEqual(schedule["number"], 2)
         self.assertEqual(schedule["uri"], original.get("uri"))
         self.assertEqual(resolved[id(schedule)], (1, original))
         scheduler._save_schedule_backup.assert_called_once_with()
 
-    def test_rebind_backup_failure_restores_state_and_defers_schedule(self):
+    async def test_rebind_backup_failure_restores_state_and_defers_schedule(self):
         schedule = self.make_schedule(number=1)
         original = leaf("Heat (1995).mkv")
         shifted = leaf("Alien (1979).mkv")
@@ -174,13 +185,13 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler._save_schedule_backup.return_value = False
         previous = schedule.copy()
 
-        resolved = scheduler._rebind_due_schedules(datetime.now(PH_TZ))
+        resolved = await scheduler._rebind_due_schedules(datetime.now(PH_TZ))
 
         self.assertEqual(schedule, previous)
         self.assertNotIn(id(schedule), resolved)
         scheduler._save_schedule_backup.assert_called_once_with()
 
-    def test_successful_playback_is_removed_only_after_current_item_is_confirmed(self):
+    async def test_successful_playback_is_removed_only_after_current_item_is_confirmed(self):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = object()
@@ -191,7 +202,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "announcing")
         self.assertEqual(scheduler.scheduled, [schedule])
@@ -225,24 +236,24 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second.send.await_count, 2)
         self.assertEqual(scheduler.scheduled, [])
 
-    def test_announcing_schedule_never_reissues_vlc_playback(self):
+    async def test_announcing_schedule_never_reissues_vlc_playback(self):
         schedule = self.make_schedule(status="announcing")
         vlc = Mock()
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = scheduler._execute_due_schedule(schedule, None, datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, None, datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "announcing")
         vlc.play_item.assert_not_called()
 
-    def test_xml_response_without_current_item_confirmation_retains_schedule(self):
+    async def test_xml_response_without_current_item_confirmation_retains_schedule(self):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = ET.Element("root")
         vlc.get_playlist.return_value = ET.Element("playlist")
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "confirming")
         self.assertEqual(scheduler.scheduled, [schedule])
@@ -250,7 +261,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schedule["target_item_id"], "Heat (1995).mkv")
         self.assertEqual(vlc.play_item.call_count, 1)
 
-    def test_unconfirmed_execution_waits_before_retrying(self):
+    async def test_unconfirmed_execution_waits_before_retrying(self):
         started = datetime.now(PH_TZ) - timedelta(seconds=30)
         schedule = self.make_schedule(
             status="executing",
@@ -261,13 +272,13 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         vlc = Mock()
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = scheduler._execute_due_schedule(schedule, None, datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, None, datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "confirming")
         vlc.play_item.assert_not_called()
         self.assertEqual(scheduler.scheduled, [schedule])
 
-    def test_unconfirmed_execution_enters_backoff_after_confirmation_window(self):
+    async def test_unconfirmed_execution_enters_backoff_after_confirmation_window(self):
         started = datetime.now(PH_TZ) - timedelta(seconds=120)
         schedule = self.make_schedule(
             status="executing",
@@ -279,7 +290,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler = self.make_scheduler(schedule, vlc)
         now = datetime.now(PH_TZ)
 
-        outcome = scheduler._execute_due_schedule(schedule, None, now)
+        outcome = await scheduler._execute_due_schedule(schedule, None, now)
 
         self.assertEqual(outcome, "retry")
         self.assertEqual(schedule["status"], "pending")
@@ -304,7 +315,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result)
         self.assertEqual(schedule, previous)
 
-    def test_execution_timeout_backup_failure_keeps_execution_claim(self):
+    async def test_execution_timeout_backup_failure_keeps_execution_claim(self):
         started = datetime.now(PH_TZ) - timedelta(seconds=120)
         schedule = self.make_schedule(
             status="executing",
@@ -316,20 +327,20 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler = self.make_scheduler(schedule, Mock())
         scheduler._save_schedule_backup.return_value = False
 
-        result = scheduler._execute_due_schedule(
+        result = await scheduler._execute_due_schedule(
             schedule, None, datetime.now(PH_TZ)
         )
 
         self.assertEqual(result, "confirming")
         self.assertEqual(schedule, previous)
 
-    def test_execution_claim_backup_failure_restores_attempt_state(self):
+    async def test_execution_claim_backup_failure_restores_attempt_state(self):
         schedule = self.make_schedule()
         previous = schedule.copy()
         scheduler = self.make_scheduler(schedule, Mock())
         scheduler._save_schedule_backup.return_value = False
 
-        result = scheduler._execute_due_schedule(
+        result = await scheduler._execute_due_schedule(
             schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ)
         )
 
@@ -337,7 +348,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(schedule, previous)
         scheduler.vlc.play_item.assert_not_called()
 
-    def test_completion_backup_failure_keeps_schedule_in_memory(self):
+    async def test_completion_backup_failure_keeps_schedule_in_memory(self):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = object()
@@ -349,7 +360,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         scheduler = self.make_scheduler(schedule, vlc)
         scheduler._save_schedule_backup.side_effect = [True, False]
 
-        outcome = scheduler._execute_due_schedule(
+        outcome = await scheduler._execute_due_schedule(
             schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ)
         )
 
@@ -357,14 +368,14 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduler.scheduled, [schedule])
         self.assertEqual(schedule["status"], "executing")
 
-    def test_ambiguous_vlc_failure_retains_claim_until_confirmation_timeout(self):
+    async def test_ambiguous_vlc_failure_retains_claim_until_confirmation_timeout(self):
         schedule = self.make_schedule()
         vlc = Mock()
         vlc.play_item.return_value = None
         scheduler = self.make_scheduler(schedule, vlc)
         now = datetime.now(PH_TZ)
 
-        outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), now)
+        outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), now)
 
         self.assertEqual(outcome, "confirming")
         self.assertEqual(scheduler.scheduled, [schedule])
@@ -374,7 +385,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(vlc.play_item.call_count, 1)
 
         schedule["execution_started_at"] = (now - timedelta(seconds=120)).isoformat()
-        retry = scheduler._execute_due_schedule(
+        retry = await scheduler._execute_due_schedule(
             schedule, leaf("Heat (1995).mkv"), now + timedelta(seconds=120)
         )
 
@@ -383,17 +394,17 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(schedule["next_attempt_at"], (now + timedelta(seconds=120)).timestamp())
         self.assertEqual(vlc.play_item.call_count, 1)
 
-    def test_retry_backoff_prevents_duplicate_attempt_before_due(self):
+    async def test_retry_backoff_prevents_duplicate_attempt_before_due(self):
         schedule = self.make_schedule(next_attempt_at=(datetime.now(PH_TZ) + timedelta(minutes=2)).timestamp())
         vlc = Mock()
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "deferred")
         vlc.play_item.assert_not_called()
 
-    def test_restart_recovers_schedule_already_playing_without_replaying(self):
+    async def test_restart_recovers_schedule_already_playing_without_replaying(self):
         schedule = self.make_schedule(
             status="executing", attempt_count=1, target_item_id="Heat (1995).mkv"
         )
@@ -402,14 +413,14 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         current_leaf = leaf("Heat (1995).mkv")
         current_leaf.set("current", "current")
 
-        outcome = scheduler._execute_due_schedule(schedule, current_leaf, datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, current_leaf, datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "announcing")
         self.assertEqual(scheduler.scheduled, [schedule])
         self.assertEqual(schedule["status"], "announcing")
         vlc.play_item.assert_not_called()
 
-    def test_restart_does_not_recover_when_rebound_target_has_a_different_id(self):
+    async def test_restart_does_not_recover_when_rebound_target_has_a_different_id(self):
         schedule = self.make_schedule(
             status="executing", attempt_count=1, target_item_id="Heat (1995).mkv"
         )
@@ -422,7 +433,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         current_playlist.append(rebound_leaf)
         vlc.get_playlist.return_value = current_playlist
 
-        outcome = scheduler._execute_due_schedule(
+        outcome = await scheduler._execute_due_schedule(
             schedule, rebound_leaf, datetime.now(PH_TZ)
         )
 
@@ -431,7 +442,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduler.scheduled, [schedule])
         self.assertEqual(schedule["status"], "announcing")
 
-    def test_restart_retries_interrupted_attempt_when_target_is_not_current(self):
+    async def test_restart_retries_interrupted_attempt_when_target_is_not_current(self):
         schedule = self.make_schedule(status="executing", attempt_count=1)
         vlc = Mock()
         vlc.play_item.return_value = object()
@@ -442,7 +453,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
 
-        outcome = scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+        outcome = await scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
 
         self.assertEqual(outcome, "announcing")
         vlc.play_item.assert_called_once_with("Heat (1995).mkv")
@@ -605,6 +616,37 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         ctx.send.assert_awaited_once_with(
             "❌ Could not save the schedule changes. No schedules were removed."
         )
+
+    async def test_vlc_playback_does_not_hold_global_schedule_lock(self):
+        schedule = self.make_schedule()
+        vlc = Mock()
+        scheduler = self.make_scheduler(schedule, vlc)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        current = leaf("Heat (1995).mkv")
+        current.set("current", "current")
+
+        async def run_async(method_name, *args, **kwargs):
+            if method_name == "play_item_and_confirm":
+                entered.set()
+                await release.wait()
+                return object(), True
+            return getattr(vlc, method_name)(*args, **kwargs)
+
+        vlc.run_async = AsyncMock(side_effect=run_async)
+        operation = asyncio.create_task(
+            scheduler._execute_due_schedule(schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ))
+        )
+        await entered.wait()
+        acquired = False
+        try:
+            await asyncio.wait_for(scheduler._schedule_lock.acquire(), timeout=0.1)
+            acquired = True
+        finally:
+            if acquired:
+                scheduler._schedule_lock.release()
+            release.set()
+        self.assertEqual(await operation, "announcing")
 
     def test_backup_load_skips_bad_entry_without_discarding_valid_schedules(self):
         valid = {
