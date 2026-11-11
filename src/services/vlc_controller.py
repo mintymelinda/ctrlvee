@@ -201,14 +201,75 @@ class VLCController:
         result["playlist_position"] = position
         return result
 
+    def _current_playlist_item(self, playlist):
+        """Return the current leaf and its one-based playlist position."""
+        if playlist is None:
+            return None, None
+        items = playlist.findall(".//leaf")
+        for position, item in enumerate(items, start=1):
+            if item.get("current"):
+                return item, position
+        return None, None
+
     def play_next_or_advance(self):
-        """Prefer the soft queue, otherwise advance VLC, as one controller operation."""
+        """Prefer the soft queue, otherwise advance and capture the selected item."""
         queued_item = self.get_next_queued_item()
         queued_result = self.play_next_queued_item() if queued_item else None
         if queued_result and queued_result.get("success"):
-            return {"queued_result": queued_result, "next_success": False}
+            return {
+                "queued_result": queued_result,
+                "next_success": False,
+                "expected_item_id": str(
+                    queued_result.get("item_id") or queued_item.get("item_id")
+                ) if queued_result.get("item_id") or queued_item.get("item_id") else None,
+            }
         next_result = self.next()
-        return {"queued_result": queued_result, "next_success": bool(next_result)}
+        if not next_result:
+            return {"queued_result": queued_result, "next_success": False}
+        current, position = self._current_playlist_item(self.get_playlist())
+        return {
+            "queued_result": queued_result,
+            "next_success": True,
+            "expected_item_id": current.get("id") if current is not None else None,
+            "item": current,
+            "position": position,
+        }
+
+    def previous_and_capture(self):
+        """Move to the previous item and capture its identity in the same operation."""
+        result = self.previous()
+        if not result:
+            return {"success": False, "expected_item_id": None}
+        current, position = self._current_playlist_item(self.get_playlist())
+        return {
+            "success": True,
+            "expected_item_id": current.get("id") if current is not None else None,
+            "item": current,
+            "position": position,
+        }
+
+    def get_current_item_if_unchanged(self, expected_item_id: str):
+        """Return a fresh playback snapshot only while the expected item remains current."""
+        status = self.get_status()
+        playlist = self.get_playlist()
+        if status is None or playlist is None:
+            return {"success": False, "reason": "playback_unavailable"}
+        current, position = self._current_playlist_item(playlist)
+        current_id = current.get("id") if current is not None else None
+        if str(current_id) != str(expected_item_id):
+            return {
+                "success": False,
+                "reason": "selection_changed",
+                "current_item_id": current_id,
+            }
+        return {
+            "success": True,
+            "reason": "confirmed",
+            "item_id": current_id,
+            "item": current,
+            "position": position,
+            "state": status.findtext("state"),
+        }
 
     def set_shuffle_state(self, enabled: bool):
         """Set shuffle to a desired state without a separate read/toggle race."""
