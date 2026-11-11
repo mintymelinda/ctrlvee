@@ -1,0 +1,35 @@
+services:
+  ctrlvee:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ctrlvee:local
+    container_name: ctrlvee
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    env_file:
+      - .env
+    environment:
+      # VLC runs on the separate Plex server, not in this container.
+      VLC_HOST: ${VLC_HOST:-192.168.0.15}
+      VLC_PORT: ${VLC_PORT:-8080}
+      QUEUE_BACKUP_FILE: /app/data/queue_backup.json
+      SCHEDULE_BACKUP_FILE: /app/data/schedule_backup.json
+      PLAYLIST_AUTOSAVE_FILE: /app/data/ctrlvee_playlist.xspf
+      PLAYBACK_PANEL_REGISTRY_PATH: /app/data/playback_panels.json
+      WATCH_STATS_FILE: /app/data/watch_stats.json
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - ./data:/app/data
+      # Optional: mount media folders at the SAME absolute paths used by VLC.
+      # This is needed for watch-folder scanning and schedule file-existence checks.
+      # - /path/on/plexserver/Movies:/path/on/plexserver/Movies:ro
+      # - /path/on/plexserver/TV:/path/on/plexserver/TV:ro
