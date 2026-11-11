@@ -8,6 +8,7 @@ from src.cogs.playback import (
     PlaybackCommands,
     PlaybackControlView,
     QueuePlaylistSelect,
+    QueueManageView,
     _decide_playback_allow,
     _member_has_allowed_role,
 )
@@ -33,6 +34,37 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
     def test_playback_panel_exposes_add_to_queue_button(self):
         view = PlaybackControlView(Mock())
         self.assertIn("Add to Queue", {button.label for button in view.children})
+
+    def test_playback_panel_exposes_manage_queue_button(self):
+        view = PlaybackControlView(Mock())
+        self.assertIn("Manage Queue", {button.label for button in view.children})
+
+    def test_queue_manager_preserves_queue_order_and_exposes_mutations(self):
+        queue_status = {
+            "queued_items": {
+                "third": {"queue_order": 3, "item_name": "Third"},
+                "first": {"queue_order": 1, "item_name": "First"},
+                "second": {"queue_order": 2, "item_name": "Second"},
+            }
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first" name="First Track"/>'
+            '<leaf id="second" name="Second Track"/>'
+            '<leaf id="third" name="Third Track"/></playlist>'
+        )
+
+        view = QueueManageView(Mock(), queue_status, playlist)
+        select = next(child for child in view.children if hasattr(child, "options"))
+        labels = {child.label for child in view.children if hasattr(child, "label")}
+
+        self.assertEqual([option.value for option in select.options], ["1", "2", "3"])
+        self.assertIn("First Track", select.options[0].label)
+        self.assertIn("Second Track", select.options[1].label)
+        self.assertIn("Third Track", select.options[2].label)
+        self.assertTrue({"Remove", "Move Earlier", "Move Later"}.issubset(labels))
+        self.assertTrue(view.remove_selected_button.disabled)
+        self.assertTrue(view.move_earlier_button.disabled)
+        self.assertTrue(view.move_later_button.disabled)
 
     def test_queue_picker_preserves_playlist_positions_and_limits_options(self):
         playlist = [
