@@ -1,7 +1,7 @@
 ## 1.9.18 - 2026-11-11
 
 ### Added
-- **Command-Triggered Voice Auto-Join**: Optional `VOICE_AUTO_JOIN_ON_COMMAND` makes playback commands join or move CtrlVee into the invoking user's current voice channel, with permission checks, per-guild connection serialization, and reconnect targeting.
+- **Command-Triggered Voice Auto-Join**: Optional `VOICE_AUTO_JOIN_ON_COMMAND` makes playback commands join or move CtrlVee into the invoking user's current voice channel, with permission checks, the existing shared voice-connection lock, and reconnect targeting.
 - **Discord Voice Encryption Compatibility**: Raised the minimum `discord.py[voice]` version to 2.7.1 so voice connections include DAVE support required by Discord.
 
 ### Notes
