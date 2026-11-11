@@ -65,6 +65,11 @@ class VoiceChannelService:
                     if current_channel is None or current_channel.id != channel.id:
                         await existing.move_to(channel)
                 else:
+                    if existing is not None:
+                        try:
+                            await existing.disconnect(force=True)
+                        except Exception:
+                            pass
                     await channel.connect(
                         timeout=self.connect_timeout,
                         self_mute=True,
