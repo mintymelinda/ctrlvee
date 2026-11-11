@@ -144,8 +144,8 @@ class RealVLCIntegrationTests(unittest.TestCase):
             time.sleep(0.25)
         self.fail(f"Timed out waiting for {description}; last value: {last_value!r}\\n{self.vlc_diagnostics()}")
 
-    def load_playlist(self):
-        """Reset VLC and enqueue fixtures, waiting for each playlist mutation."""
+    def clear_playlist(self):
+        """Stop playback and wait until VLC confirms the playlist is empty."""
         self.controller.stop()
         self.controller.send_command("pl_empty")
         self.wait_for(
@@ -156,6 +156,10 @@ class RealVLCIntegrationTests(unittest.TestCase):
             "VLC playlist to become empty",
         )
         self.controller.clear_queue_tracking()
+
+    def load_playlist(self):
+        """Reset VLC and enqueue fixtures, waiting for each playlist mutation."""
+        self.clear_playlist()
 
         item_ids = []
         for index, media_path in enumerate(self.media_paths, start=1):
@@ -382,6 +386,10 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(self.controller.get_playlist())
 
     def test_real_vlc_enqueue_play_pause_seek_resume_and_stop(self):
+        # The VLC server is shared for this test class. Previous tests may have
+        # left media loaded or paused, so this test must establish an empty
+        # playlist before asserting the single-item enqueue/play lifecycle.
+        self.clear_playlist()
         initial_status = self.controller.get_status()
         self.assertIsNotNone(
             initial_status,
