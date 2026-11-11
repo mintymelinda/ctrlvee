@@ -3,6 +3,7 @@ import json
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -32,6 +33,70 @@ class VLCControllerTests(unittest.TestCase):
         ):
             result = self.controller.queue_item_next(item_id)
         self.assertTrue(result["success"], result)
+
+    def test_play_if_not_playing_checks_and_starts_under_one_operation(self):
+        status = ET.fromstring("<root><state>paused</state></root>")
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "play", return_value=ET.fromstring("<root><ok/></root>")
+        ) as play:
+            result = self.controller.play_if_not_playing()
+        self.assertTrue(result["available"])
+        self.assertTrue(result["command_sent"])
+        play.assert_called_once_with()
+
+    def test_pause_if_playing_does_not_pause_a_stopped_player(self):
+        status = ET.fromstring("<root><state>stopped</state></root>")
+        with patch.object(self.controller, "get_status", return_value=status), patch.object(
+            self.controller, "pause"
+        ) as pause:
+            result = self.controller.pause_if_playing()
+        self.assertTrue(result["available"])
+        self.assertFalse(result["command_sent"])
+        pause.assert_not_called()
+
+    def test_play_playlist_item_at_position_selects_and_plays_atomically(self):
+        playlist = ET.fromstring('<playlist><leaf id="1" name="First"/><leaf id="2" name="Second"/></playlist>')
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "play_item", return_value=ET.fromstring("<root><ok/></root>")
+        ) as play:
+            result = self.controller.play_playlist_item_at_position(2)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["item_id"], "2")
+        self.assertEqual(result["item"].get("name"), "Second")
+        play.assert_called_once_with("2")
+
+    def test_queue_playlist_item_at_position_selects_and_queues_atomically(self):
+        playlist = ET.fromstring('<playlist><leaf id="1" name="First"/><leaf id="2" name="Second"/></playlist>')
+        queued = {"success": True, "queue_order": 1, "total_queued": 1}
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "queue_item_next", return_value=queued
+        ) as queue:
+            result = self.controller.queue_playlist_item_at_position(2)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["item_id"], "2")
+        self.assertEqual(result["item_name"], "Second")
+        self.assertEqual(result["playlist_position"], 2)
+        queue.assert_called_once_with("2")
+
+    def test_play_next_or_advance_prefers_queued_item(self):
+        queued = {"success": True, "item_name": "Queued"}
+        with patch.object(self.controller, "get_next_queued_item", return_value={"item_id": "1"}), patch.object(
+            self.controller, "play_next_queued_item", return_value=queued
+        ), patch.object(self.controller, "next") as next_track:
+            result = self.controller.play_next_or_advance()
+        self.assertIs(result["queued_result"], queued)
+        self.assertFalse(result["next_success"])
+        next_track.assert_not_called()
+
+    def test_set_shuffle_state_only_toggles_when_needed(self):
+        with patch.object(self.controller, "get_shuffle_state", return_value=False), patch.object(
+            self.controller, "toggle_shuffle", return_value=ET.fromstring("<root><ok/></root>")
+        ) as toggle:
+            result = self.controller.set_shuffle_state(True)
+        self.assertTrue(result["success"])
+        self.assertFalse(result["previous"])
+        self.assertTrue(result["enabled"])
+        toggle.assert_called_once_with()
 
     def test_queue_backup_round_trip_preserves_both_queue_structures(self):
         self.controller._queued_items = {

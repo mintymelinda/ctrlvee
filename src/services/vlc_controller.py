@@ -106,6 +106,89 @@ class VLCController:
         with self._operation_thread_lock:
             return method(*args, **kwargs)
 
+    def play_if_not_playing(self):
+        """Check VLC state and start playback without a separate read/write race."""
+        status = self.get_status()
+        if status is None:
+            return {"available": False, "command_sent": False}
+        state = status.findtext("state")
+        if state == "playing":
+            return {"available": True, "state": state, "command_sent": False}
+        return {"available": True, "state": state, "command_sent": bool(self.play())}
+
+    def pause_if_playing(self):
+        """Check VLC state and pause playback within one serialized operation."""
+        status = self.get_status()
+        if status is None:
+            return {"available": False, "command_sent": False}
+        state = status.findtext("state")
+        if state != "playing":
+            return {"available": True, "state": state, "command_sent": False}
+        return {"available": True, "state": state, "command_sent": bool(self.pause())}
+
+    def play_playlist_item_at_position(self, position: int):
+        """Resolve and play a playlist position without allowing interleaving."""
+        playlist = self.get_playlist()
+        if playlist is None:
+            return {"success": False, "error": "playlist_unavailable"}
+        items = playlist.findall(".//leaf")
+        if not items:
+            return {"success": False, "error": "playlist_empty"}
+        if position < 1 or position > len(items):
+            return {"success": False, "error": "position_out_of_range", "playlist_count": len(items)}
+        item = items[position - 1]
+        item_id = item.get("id")
+        if not item_id:
+            return {"success": False, "error": "item_id_missing"}
+        return {"success": bool(self.play_item(item_id)), "item": item, "item_id": item_id, "playlist_count": len(items)}
+
+    def queue_playlist_item_at_position(self, position: int):
+        """Resolve a playlist position and add it to the soft queue atomically."""
+        playlist = self.get_playlist()
+        if playlist is None:
+            return {"success": False, "error": "playlist_unavailable"}
+        items = playlist.findall(".//leaf")
+        if not items:
+            return {"success": False, "error": "playlist_empty"}
+        if position < 1 or position > len(items):
+            return {"success": False, "error": "position_out_of_range", "playlist_count": len(items)}
+        item = items[position - 1]
+        item_id = item.get("id")
+        if not item_id:
+            return {"success": False, "error": "item_id_missing"}
+        result = self.queue_item_next(item_id)
+        result["item_id"] = item_id
+        result["item_name"] = item.get("name", "Unknown")
+        result["playlist_position"] = position
+        return result
+
+    def play_next_or_advance(self):
+        """Prefer the soft queue, otherwise advance VLC, as one controller operation."""
+        queued_item = self.get_next_queued_item()
+        queued_result = self.play_next_queued_item() if queued_item else None
+        if queued_result and queued_result.get("success"):
+            return {"queued_result": queued_result, "next_success": False}
+        next_result = self.next()
+        return {"queued_result": queued_result, "next_success": bool(next_result)}
+
+    def set_shuffle_state(self, enabled: bool):
+        """Set shuffle to a desired state without a separate read/toggle race."""
+        current = self.get_shuffle_state()
+        if current == enabled:
+            return {"success": True, "previous": current, "enabled": current, "changed": False}
+        result = self.toggle_shuffle()
+        return {"success": bool(result), "previous": current, "enabled": enabled if result else current, "changed": bool(result)}
+
+    def toggle_shuffle_state(self):
+        """Read and toggle shuffle as one serialized operation."""
+        current = self.get_shuffle_state()
+        result = self.toggle_shuffle()
+        return {"success": bool(result), "previous": current, "enabled": not current if result else current}
+
+    def get_queue_snapshot(self):
+        """Read soft-queue state and its playlist mapping atomically."""
+        return self.get_queue_status(), self.get_playlist()
+
     def get_playback_snapshot(self):
         """Read status and playlist as one serialized observation."""
         return self.get_status(), self.get_playlist()
