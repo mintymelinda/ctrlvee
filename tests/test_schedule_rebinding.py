@@ -81,13 +81,13 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 previous_item = next(
                     (item for item in previous.findall(".//leaf") if item.get("current") is not None),
                     None,
-                ) if previous is not None else None
+                ) if isinstance(previous, ET.Element) else None
                 result = vlc.play_item(*args, **kwargs)
                 playlist = vlc.get_playlist()
                 current = next(
                     (item for item in playlist.findall(".//leaf") if item.get("current") is not None),
                     None,
-                ) if playlist is not None else None
+                ) if isinstance(playlist, ET.Element) else None
                 return (
                     result,
                     bool(current is not None and str(current.get("id")) == str(args[0])),
@@ -217,7 +217,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduler.scheduled, [schedule])
         self.assertEqual(schedule["status"], "announcing")
         self.assertEqual(vlc.play_item.call_count, 1)
-        self.assertEqual(scheduler._save_schedule_backup.call_count, 2)
+        self.assertEqual(scheduler._save_schedule_backup.call_count, 3)
 
     @patch("src.config.Config.get_announce_channel_ids", return_value=[101, 202])
     async def test_start_announcement_retries_failed_channel_without_resending_successful_channel(self, _):
