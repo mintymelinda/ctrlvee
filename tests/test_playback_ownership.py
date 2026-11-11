@@ -1,4 +1,5 @@
 import unittest
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -127,6 +128,77 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(cog._command_initiated_item_id)
         cog._seat_playback_owner.assert_not_called()
         cog._announce_now_playing.assert_not_awaited()
+
+    async def test_monitor_announcement_stops_when_selection_changes_during_presence(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog.vlc = SimpleNamespace(
+            run_async=AsyncMock(return_value={
+                "success": False,
+                "reason": "selection_changed",
+                "current_item_id": "2",
+            })
+        )
+        cog._choose_metadata_source_name = Mock(return_value="Track")
+        cog._set_presence = AsyncMock()
+        cog._set_voice_channel_status = AsyncMock()
+        cog._np_cooldown = 10
+        cog._last_now_playing_key = None
+        cog._last_now_playing_ts = 0.0
+        cog.tmdb = SimpleNamespace()
+        cog.logger = Mock()
+        item = ET.Element("leaf", {"id": "1", "name": "Track"})
+
+        with (
+            patch("src.cogs.playback.MediaUtils.clean_filename_for_display", return_value="Track"),
+            patch("src.cogs.playback.MediaUtils.parse_movie_filename", return_value=(None, None)),
+            patch(
+                "src.cogs.playback.MediaUtils.parse_tv_filename",
+                return_value=(None, None, None, None),
+            ),
+            patch("src.cogs.playback.MediaUtils.extract_edition_tag", return_value=None),
+        ):
+            await cog._announce_now_playing(
+                "monitor", item, 1, expected_state="playing"
+            )
+
+        cog.vlc.run_async.assert_awaited_once_with(
+            "get_current_item_if_unchanged", "1"
+        )
+        cog._set_presence.assert_awaited_once()
+        cog._set_voice_channel_status.assert_not_awaited()
+
+    async def test_monitor_announcement_stops_when_selection_changes_during_voice_status(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog.vlc = SimpleNamespace(run_async=AsyncMock())
+        cog._choose_metadata_source_name = Mock(return_value="Track")
+        cog._set_presence = AsyncMock()
+        cog._set_voice_channel_status = AsyncMock()
+        cog._monitor_snapshot_is_current = AsyncMock(side_effect=[True, False])
+        cog._np_cooldown = 10
+        cog._last_now_playing_key = None
+        cog._last_now_playing_ts = 0.0
+        cog.tmdb = SimpleNamespace()
+        cog.logger = Mock()
+        item = ET.Element("leaf", {"id": "1", "name": "Track"})
+
+        with (
+            patch("src.cogs.playback.MediaUtils.clean_filename_for_display", return_value="Track"),
+            patch("src.cogs.playback.MediaUtils.parse_movie_filename", return_value=(None, None)),
+            patch(
+                "src.cogs.playback.MediaUtils.parse_tv_filename",
+                return_value=(None, None, None, None),
+            ),
+            patch("src.cogs.playback.MediaUtils.extract_edition_tag", return_value=None),
+        ):
+            await cog._announce_now_playing(
+                "monitor", item, 1, expected_state="playing"
+            )
+
+        cog._set_presence.assert_awaited_once()
+        cog._set_voice_channel_status.assert_awaited_once()
+        cog._monitor_snapshot_is_current.assert_has_awaits(
+            [unittest.mock.call("1", "playing"), unittest.mock.call("1", "playing")]
+        )
 
     async def test_unresolvable_configured_room_fails_closed(self):
         guild = SimpleNamespace(get_member=lambda _user_id: None)
