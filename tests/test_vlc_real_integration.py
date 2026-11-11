@@ -125,11 +125,14 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(initial_status, "Controller could not read VLC status")
         self.assertTrue(self.controller.enqueue_path(str(self.media_path)))
 
+        def playlist_with_item():
+            playlist_snapshot = self.controller.get_playlist()
+            if playlist_snapshot is not None and playlist_snapshot.find(".//leaf") is not None:
+                return playlist_snapshot
+            return None
+
         playlist = self.wait_for(
-            lambda: self.controller.get_playlist()
-            if self.controller.get_playlist() is not None
-            and self.controller.get_playlist().find(".//leaf") is not None
-            else None,
+            playlist_with_item,
             "media to appear in VLC playlist",
         )
         item = playlist.find(".//leaf")
