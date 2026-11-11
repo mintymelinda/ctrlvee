@@ -366,7 +366,10 @@ class RealVLCIntegrationTests(unittest.TestCase):
             )
 
         results = asyncio.run(issue_commands())
-        self.assertTrue(\n            all(result is not None for result in results),\n            f"Serialized VLC command results: {results!r}\\n{self.vlc_diagnostics()}",\n        )
+        self.assertTrue(
+            all(result is not None for result in results),
+            f"Serialized VLC command results: {results!r}\n{self.vlc_diagnostics()}",
+        )
         self.wait_for_current_item(second_id)
         final_status = self.wait_for(
             lambda: status
@@ -380,7 +383,10 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
     def test_real_vlc_enqueue_play_pause_seek_resume_and_stop(self):
         initial_status = self.controller.get_status()
-        self.assertIsNotNone(\n            initial_status,\n            f"Controller could not read VLC status\\n{self.vlc_diagnostics()}",\n        )
+        self.assertIsNotNone(
+            initial_status,
+            f"Controller could not read VLC status\n{self.vlc_diagnostics()}",
+        )
         self.assertTrue(self.controller.enqueue_path(str(self.media_path)))
 
         def playlist_with_item():
