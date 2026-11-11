@@ -37,6 +37,7 @@ For a split setup with VLC on a LAN host (for example, `192.168.0.15`) and CtrlV
 ```bash
 cp template.env .env
 mkdir -p data
+sudo chown -R 1000:1000 data
 # Edit .env before starting; set the Discord/TMDB credentials and VLC_HOST.
 docker compose up -d --build
 docker compose logs -f ctrlvee
