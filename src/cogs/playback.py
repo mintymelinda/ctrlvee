@@ -103,17 +103,16 @@ class PlaybackCommands(commands.Cog):
         except Exception:
             return None
 
-    def _current_stream_item_id(self) -> str | None:
+    async def _current_stream_item_id(self) -> str | None:
         """Return the VLC playlist ID currently playing, if any."""
         try:
-            status = self.vlc.get_status()
+            status, playlist = await self.vlc.run_async("get_playback_snapshot")
             if status is None:
                 return None
             state_element = status.find("state")
             state = state_element.text if state_element is not None else None
             if state in (None, "stopped", "end"):
                 return None
-            playlist = self.vlc.get_playlist()
             if playlist is None:
                 return None
             for leaf in playlist.findall(".//leaf"):
@@ -123,7 +122,7 @@ class PlaybackCommands(commands.Cog):
             return None
         return None
 
-    def _playback_guard(self, member: discord.Member, presence_only: bool = False) -> tuple[bool, str]:
+    async def _playback_guard(self, member: discord.Member, presence_only: bool = False) -> tuple[bool, str]:
         """Enforce voice-room presence and prevent hijacking an active user's track."""
         if not bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
             return True, ""
@@ -138,7 +137,7 @@ class PlaybackCommands(commands.Cog):
         requester_in_room = bool(
             voice and voice.channel and room is not None and voice.channel.id == room.id
         )
-        current_id = None if presence_only else self._current_stream_item_id()
+        current_id = None if presence_only else await self._current_stream_item_id()
         owner_id = None if presence_only else self._playback_owner_id
         owner = None
         owner_in_room = False
@@ -167,7 +166,7 @@ class PlaybackCommands(commands.Cog):
 
     async def _check_room(self, ctx) -> bool:
         """Presence-only guard for controls that do not start a different item."""
-        allowed, reason = self._playback_guard(ctx.author, presence_only=True)
+        allowed, reason = await self._playback_guard(ctx.author, presence_only=True)
         if not allowed:
             await ctx.send(reason)
         return allowed
@@ -282,7 +281,7 @@ class PlaybackCommands(commands.Cog):
             # Try to resolve the current item's display name from playlist first
             name = None
             try:
-                playlist = self.vlc.get_playlist()
+                playlist = await self.vlc.run_async("get_playlist")
                 if playlist is not None:
                     _, current_item = self._find_current_position(playlist)
                     if current_item is not None:
@@ -561,7 +560,7 @@ class PlaybackCommands(commands.Cog):
         except Exception:
             pass
         try:
-            result = self.vlc.remove_missing_playlist_items()
+            result = await self.vlc.run_async("remove_missing_playlist_items")
             removed = int(result.get('removed', 0))
             items = result.get('items', []) or []
             if removed == 0:
@@ -689,7 +688,7 @@ class PlaybackCommands(commands.Cog):
                 # Resolve current title
                 title = None
                 try:
-                    playlist = self.vlc.get_playlist()
+                    playlist = await self.vlc.run_async("get_playlist")
                     if playlist is not None:
                         _, current_item = self._find_current_position(playlist)
                         if current_item is not None:
@@ -853,7 +852,7 @@ class PlaybackCommands(commands.Cog):
 
             ok = False
             try:
-                ok = self.vlc.set_rate(rate)
+                ok = await self.vlc.run_async("set_rate", rate)
             except Exception as e:
                 logger.error(f"Error setting playback rate: {e}")
 
@@ -1154,12 +1153,12 @@ class PlaybackCommands(commands.Cog):
                         if current_state == 'stopped':
                             # Reset playback rate when VLC has stopped (file finished)
                             try:
-                                self.vlc.set_rate(1.0)
+                                await self.vlc.run_async("set_rate", 1.0)
                             except Exception:
                                 pass
                             if self._check_queue_auto_play_cooldown():
                                 try:
-                                    play_result = self.vlc.play_next_queued_item()
+                                    play_result = await self.vlc.run_async("play_next_queued_item")
                                     logger.info(f"Auto-play result from stopped state: {play_result}")
                                     if play_result.get("success"):
                                         logger.info(f"Auto-played next queued item: {play_result.get('item_name', 'Unknown')}")
@@ -1190,7 +1189,7 @@ class PlaybackCommands(commands.Cog):
                                 if self._check_queue_auto_play_cooldown():
                                     try:
                                         logger.info(f"Periodic check: Wrong item playing ({current_item_id}), should be queued item ({next_queued['item_id']}) - correcting")
-                                        play_result = self.vlc.play_next_queued_item()
+                                        play_result = await self.vlc.run_async("play_next_queued_item")
                                         
                                         if play_result.get("success"):
                                             logger.info(f"Periodic correction successful: {play_result.get('item_name', 'Unknown')}")
@@ -1256,7 +1255,7 @@ class PlaybackCommands(commands.Cog):
     async def subtitle_next(self, ctx):
         """Cycle to the next subtitle track in VLC (if supported)."""
         try:
-            ok = self.vlc.subtitle_next()
+            ok = await self.vlc.run_async("subtitle_next")
             if ok:
                 embed = discord.Embed(
                     title="💬 Subtitles",
@@ -1283,7 +1282,7 @@ class PlaybackCommands(commands.Cog):
     async def subtitle_prev(self, ctx):
         """Cycle to the previous subtitle track in VLC (if supported)."""
         try:
-            ok = self.vlc.subtitle_prev()
+            ok = await self.vlc.run_async("subtitle_prev")
             if ok:
                 embed = discord.Embed(
                     title="💬 Subtitles",
@@ -1315,7 +1314,7 @@ class PlaybackCommands(commands.Cog):
             except Exception:
                 pass
             
-            tracks = self.vlc.get_subtitle_tracks()
+            tracks = await self.vlc.run_async("get_subtitle_tracks")
             if tracks is None:
                 await ctx.send("Couldn't retrieve subtitle tracks from VLC.")
                 return
@@ -1391,7 +1390,7 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send(f"Usage: {format_cmd_inline('sub_set <number|off>')}")
                 return
             # Fetch tracks to support index-based addressing
-            tracks = self.vlc.get_subtitle_tracks() or []
+            tracks = await self.vlc.run_async("get_subtitle_tracks") or []
             logger.info(f"sub_set: User requested '{track_id}', found {len(tracks)} tracks")
             
             # Log all tracks for debugging
@@ -1403,9 +1402,9 @@ class PlaybackCommands(commands.Cog):
             if track_id.lower() in tokens_off:
                 logger.info(f"sub_set: Disabling subtitles")
                 # Try -1 first, fallback to 0 for older VLC versions
-                ok = self.vlc.set_subtitle_track(-1)
+                ok = await self.vlc.run_async("set_subtitle_track", -1)
                 if not ok:
-                    ok = self.vlc.set_subtitle_track(0)
+                    ok = await self.vlc.run_async("set_subtitle_track", 0)
                 if not ok:
                     await ctx.send("Failed to disable subtitles (tried -1 and 0).")
                     return
@@ -1456,7 +1455,7 @@ class PlaybackCommands(commands.Cog):
             ok = False
             if stream_idx is not None:
                 logger.info(f"sub_set: Attempting to set subtitle by stream_index={stream_idx}")
-                ok = self.vlc.set_subtitle_track(stream_idx)
+                ok = await self.vlc.run_async("set_subtitle_track", stream_idx)
                 if ok:
                     logger.info(f"sub_set: Successfully set by stream_index={stream_idx}")
                     # Track the selected subtitle
@@ -1464,7 +1463,7 @@ class PlaybackCommands(commands.Cog):
             
             if not ok and tid is not None:
                 logger.info(f"sub_set: Attempting to set subtitle by track id={tid}")
-                ok = self.vlc.set_subtitle_track(tid)
+                ok = await self.vlc.run_async("set_subtitle_track", tid)
                 if ok:
                     logger.info(f"sub_set: Successfully set by track id={tid}")
                     self.selected_subtitle_stream_index = stream_idx if stream_idx else tid
@@ -1472,12 +1471,12 @@ class PlaybackCommands(commands.Cog):
             if not ok:
                 # Try direct position fallback for VLC versions that support it
                 logger.warning(f"sub_set: Failed to set by stream_index and id, trying position-based fallback")
-                ok = self.vlc.set_subtitle_track(pos_index - 1)
+                ok = await self.vlc.run_async("set_subtitle_track", pos_index - 1)
                 if ok:
                     logger.info(f"sub_set: Successfully set by position {pos_index - 1}")
                     self.selected_subtitle_stream_index = stream_idx if stream_idx else (pos_index - 1)
                 else:
-                    ok = self.vlc.set_subtitle_track(pos_index)
+                    ok = await self.vlc.run_async("set_subtitle_track", pos_index)
                     if ok:
                         logger.info(f"sub_set: Successfully set by position {pos_index}")
                         self.selected_subtitle_stream_index = stream_idx if stream_idx else pos_index
@@ -1492,7 +1491,7 @@ class PlaybackCommands(commands.Cog):
                 return
 
             # Confirm new selection by re-reading tracks
-            tracks2 = self.vlc.get_subtitle_tracks() or []
+            tracks2 = await self.vlc.run_async("get_subtitle_tracks") or []
             selected_name = None
             selected_pos = None
             # Use the track we attempted to set as a fallback if VLC doesn't mark selection
@@ -1537,7 +1536,7 @@ class PlaybackCommands(commands.Cog):
             except Exception:
                 pass
 
-            tracks = self.vlc.get_audio_tracks()
+            tracks = await self.vlc.run_async("get_audio_tracks")
             if tracks is None:
                 await ctx.send("Couldn't retrieve audio tracks from VLC.")
                 return
@@ -1599,7 +1598,7 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send(f"Usage: {format_cmd_inline('audio_set <number>')}")
                 return
 
-            tracks = self.vlc.get_audio_tracks() or []
+            tracks = await self.vlc.run_async("get_audio_tracks") or []
             if not tracks:
                 await ctx.send(f"No audio tracks found. Use {format_cmd_inline('audio_list')} to check availability.")
                 return
@@ -1631,21 +1630,21 @@ class PlaybackCommands(commands.Cog):
 
             ok = False
             if stream_idx is not None:
-                ok = self.vlc.set_audio_track(stream_idx)
+                ok = await self.vlc.run_async("set_audio_track", stream_idx)
                 if ok:
                     self.selected_audio_stream_index = stream_idx
 
             if not ok and tid is not None:
-                ok = self.vlc.set_audio_track(tid)
+                ok = await self.vlc.run_async("set_audio_track", tid)
                 if ok:
                     self.selected_audio_stream_index = stream_idx if stream_idx is not None else tid
 
             if not ok:
-                ok = self.vlc.set_audio_track(pos_index - 1)
+                ok = await self.vlc.run_async("set_audio_track", pos_index - 1)
                 if ok:
                     self.selected_audio_stream_index = stream_idx if stream_idx is not None else (pos_index - 1)
                 else:
-                    ok = self.vlc.set_audio_track(pos_index)
+                    ok = await self.vlc.run_async("set_audio_track", pos_index)
                     if ok:
                         self.selected_audio_stream_index = stream_idx if stream_idx is not None else pos_index
 
@@ -1689,7 +1688,7 @@ class PlaybackCommands(commands.Cog):
 
             state = status.find('state').text
             
-            playlist = self.vlc.get_playlist()
+            playlist = await self.vlc.run_async("get_playlist")
             position, current_item = self._find_current_position(playlist)
             
             item_name = None
@@ -1876,7 +1875,7 @@ class PlaybackCommands(commands.Cog):
         if state == 'playing':
             return
 
-        if self.vlc.play():
+        if await self.vlc.run_async("play"):
             await asyncio.sleep(0.5)
             new_status = await self.vlc.run_async("get_status")
             if new_status and new_status.find('state').text == 'playing':
@@ -1906,7 +1905,7 @@ class PlaybackCommands(commands.Cog):
         if state != 'playing':
             return
 
-        if self.vlc.pause():
+        if await self.vlc.run_async("pause"):
             await asyncio.sleep(0.5)
             new_status = await self.vlc.run_async("get_status")
             if new_status and new_status.find('state').text == 'paused':
@@ -1922,7 +1921,7 @@ class PlaybackCommands(commands.Cog):
 
         if not await self._check_room(ctx):
             return
-        if self.vlc.stop():
+        if await self.vlc.run_async("stop"):
             logger.info("Playback stopped")
             embed = discord.Embed(
                 title="⏹️ Playback stopped",
@@ -1946,7 +1945,7 @@ class PlaybackCommands(commands.Cog):
 
         if not await self._check_room(ctx):
             return
-        if self.vlc.seek("0"):
+        if await self.vlc.run_async("seek", "0"):
             logger.info("Restarted current file from beginning")
             await ctx.send('Restarted current file from the beginning')
         else:
@@ -1969,7 +1968,7 @@ class PlaybackCommands(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-        if self.vlc.seek(f"-{seconds}"):
+        if await self.vlc.run_async("seek", f"-{seconds}"):
             embed = discord.Embed(
                 title="⏪ Rewound",
                 description=f"Rewound {seconds} seconds",
@@ -2000,7 +1999,7 @@ class PlaybackCommands(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-        if self.vlc.seek(f"+{seconds}"):
+        if await self.vlc.run_async("seek", f"+{seconds}"):
             embed = discord.Embed(
                 title="⏩ Fast-forwarded",
                 description=f"Fast forwarded {seconds} seconds",
@@ -2024,12 +2023,12 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send('Please provide a number greater than 0')
                 return
 
-            ok, reason = self._playback_guard(ctx.author)
+            ok, reason = await self._playback_guard(ctx.author)
             if not ok:
                 await ctx.send(reason)
                 return
 
-            playlist = self.vlc.get_playlist()
+            playlist = await self.vlc.run_async("get_playlist")
             if not playlist:
                 await ctx.send('Could not access VLC playlist')
                 return
@@ -2046,7 +2045,7 @@ class PlaybackCommands(commands.Cog):
             item = items[number - 1]
             item_id = item.get('id')
 
-            if self.vlc.play_item(item_id):
+            if await self.vlc.run_async("play_item", item_id):
                 self._seat_playback_owner(ctx.author, item_id)
                 logger.info(f"Loading playlist item #{number}")
                 await ctx.send(f'Loading item #{number}...')
@@ -2060,14 +2059,14 @@ class PlaybackCommands(commands.Cog):
                 state = status.find('state').text
                 if state != 'playing':
                     # If not playing yet, try to start playback
-                    self.vlc.play()
+                    await self.vlc.run_async("play")
                     await asyncio.sleep(2)
                     status = await self.vlc.run_async("get_status")
                     if status:
                         state = status.find('state').text
                         if state != 'playing':
                             # One more try
-                            self.vlc.play()
+                            await self.vlc.run_async("play")
                             await asyncio.sleep(1)
                 
                 # Announce now playing via unified announcer
@@ -2089,7 +2088,7 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
         
-        ok, reason = self._playback_guard(ctx.author)
+        ok, reason = await self._playback_guard(ctx.author)
         if not ok:
             await ctx.send(reason)
             return
@@ -2098,7 +2097,7 @@ class PlaybackCommands(commands.Cog):
         next_queued = await self.vlc.run_async("get_next_queued_item")
         if next_queued:
             logger.info(f"Playing next queued item: {next_queued['item_name']}")
-            result = self.vlc.play_next_queued_item()
+            result = await self.vlc.run_async("play_next_queued_item")
             
             if result.get("success"):
                 embed = discord.Embed(
@@ -2123,7 +2122,7 @@ class PlaybackCommands(commands.Cog):
                 # Fall through to normal next behavior
         
         # If no queued items or queue failed, use normal next behavior
-        if self.vlc.next():
+        if await self.vlc.run_async("next"):
             logger.info("Loading next track")
             await ctx.send('Loading next track...')
             try:
@@ -2144,7 +2143,7 @@ class PlaybackCommands(commands.Cog):
                 await asyncio.sleep(2)
                 status = await self.vlc.run_async("get_status")
             
-            playlist = self.vlc.get_playlist()
+            playlist = await self.vlc.run_async("get_playlist")
             if status and playlist:
                 position, current_item = self._find_current_position(playlist)
                 if current_item is not None:
@@ -2167,12 +2166,12 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_cooldown(ctx):
             return
             
-        ok, reason = self._playback_guard(ctx.author)
+        ok, reason = await self._playback_guard(ctx.author)
         if not ok:
             await ctx.send(reason)
             return
 
-        if self.vlc.previous():
+        if await self.vlc.run_async("previous"):
             logger.info("Loading previous track")
             await ctx.send('Loading previous track...')
             try:
@@ -2192,7 +2191,7 @@ class PlaybackCommands(commands.Cog):
                 await asyncio.sleep(2)
                 status = await self.vlc.run_async("get_status")
             
-            playlist = self.vlc.get_playlist()
+            playlist = await self.vlc.run_async("get_playlist")
             if status and playlist:
                 # Find current item
                 current_item = None
@@ -2314,7 +2313,7 @@ class PlaybackCommands(commands.Cog):
         logger.debug(f"Status - Current Info: {ET.tostring(current).decode() if current is not None else 'None'}")
         
         # Get position by finding current item in playlist
-        playlist = self.vlc.get_playlist()
+        playlist = await self.vlc.run_async("get_playlist")
         current_position = None
         if playlist is not None:
             # Find current item and its position
@@ -2354,7 +2353,7 @@ class PlaybackCommands(commands.Cog):
             
             # If we couldn't get name from status, try playlist
             if not name:
-                playlist = self.vlc.get_playlist()
+                playlist = await self.vlc.run_async("get_playlist")
                 if playlist is not None:
                     for item in playlist.findall('.//leaf'):
                         if item.get('current'):
@@ -2365,7 +2364,7 @@ class PlaybackCommands(commands.Cog):
             playlist_name = None
             current_item_uri = None
             try:
-                playlist = self.vlc.get_playlist()
+                playlist = await self.vlc.run_async("get_playlist")
                 if playlist is not None:
                     for item in playlist.findall('.//leaf'):
                         if item.get('current'):
@@ -2543,12 +2542,12 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send('Please provide a number greater than 0')
                 return
 
-            ok, reason = self._playback_guard(ctx.author)
+            ok, reason = await self._playback_guard(ctx.author)
             if not ok:
                 await ctx.send(reason)
                 return
 
-            playlist = self.vlc.get_playlist()
+            playlist = await self.vlc.run_async("get_playlist")
             if not playlist:
                 await ctx.send('Could not access VLC playlist')
                 return
@@ -2567,7 +2566,7 @@ class PlaybackCommands(commands.Cog):
             item_name = item.get('name', 'Unknown')
 
             # Queue the item
-            result = self.vlc.queue_item_next(item_id)
+            result = await self.vlc.run_async("queue_item_next", item_id)
             
             if result.get("success"):
                 embed = discord.Embed(
@@ -2601,7 +2600,7 @@ class PlaybackCommands(commands.Cog):
     async def queue_status(self, ctx):
         """Show current soft queue status and shuffle state"""
         try:
-            queue_status = self.vlc.get_queue_status()
+            queue_status = await self.vlc.run_async("get_queue_status")
             shuffle_on = queue_status.get("shuffle_currently_on", False)
             
             embed = discord.Embed(
@@ -2618,7 +2617,7 @@ class PlaybackCommands(commands.Cog):
             # Active queued items
             if queued_items:
                 # Get playlist to map item IDs to titles and positions
-                playlist = self.vlc.get_playlist()
+                playlist = await self.vlc.run_async("get_playlist")
                 playlist_map = {}
                 if playlist:
                     for idx, item in enumerate(playlist.findall('.//leaf'), 1):
@@ -2676,7 +2675,7 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            self.vlc.clear_queue_tracking()
+            await self.vlc.run_async("clear_queue_tracking")
             embed = discord.Embed(
                 title="🗑️ Queue Cleared",
                 description="All queue tracking has been cleared",
@@ -2711,10 +2710,10 @@ class PlaybackCommands(commands.Cog):
         try:
             if ref.startswith('#'):
                 num = int(ref[1:])
-                result = self.vlc.remove_from_queue_by_playlist_number(num)
+                result = await self.vlc.run_async("remove_from_queue_by_playlist_number", num)
             else:
                 num = int(ref)
-                result = self.vlc.remove_from_queue_by_order(num)
+                result = await self.vlc.run_async("remove_from_queue_by_order", num)
 
             if not result.get('success'):
                 await ctx.send(f"❌ {result.get('error', 'Failed to remove from queue')}")
@@ -2741,7 +2740,7 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            current_shuffle = self.vlc.get_shuffle_state()
+            current_shuffle = await self.vlc.run_async("get_shuffle_state")
             
             if current_shuffle:
                 embed = discord.Embed(
@@ -2751,7 +2750,7 @@ class PlaybackCommands(commands.Cog):
                 )
             else:
                 # Enable shuffle
-                self.vlc.toggle_shuffle()
+                await self.vlc.run_async("toggle_shuffle")
                 embed = discord.Embed(
                     title="🔀 Shuffle Enabled",
                     description="Shuffle mode has been turned on",
@@ -2773,7 +2772,7 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            current_shuffle = self.vlc.get_shuffle_state()
+            current_shuffle = await self.vlc.run_async("get_shuffle_state")
             
             if not current_shuffle:
                 embed = discord.Embed(
@@ -2783,7 +2782,7 @@ class PlaybackCommands(commands.Cog):
                 )
             else:
                 # Disable shuffle
-                self.vlc.toggle_shuffle()
+                await self.vlc.run_async("toggle_shuffle")
                 embed = discord.Embed(
                     title="▶️ Shuffle Disabled",
                     description="Shuffle mode has been turned off",
@@ -2805,10 +2804,10 @@ class PlaybackCommands(commands.Cog):
         if not await self._check_room(ctx):
             return
         try:
-            current_shuffle = self.vlc.get_shuffle_state()
+            current_shuffle = await self.vlc.run_async("get_shuffle_state")
             
             # Toggle shuffle
-            self.vlc.toggle_shuffle()
+            await self.vlc.run_async("toggle_shuffle")
             new_shuffle = not current_shuffle
             
             if new_shuffle:

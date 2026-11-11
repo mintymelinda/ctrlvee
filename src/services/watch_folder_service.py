@@ -293,7 +293,7 @@ class WatchFolderService:
         for idx, path in enumerate(new_files, 1):
             try:
                 self.logger.info(f"Enqueuing via VLC: {idx}/{total} {path}")
-                ok = self.vlc.enqueue_path(path)
+                ok = self.vlc.run_sync("enqueue_path", path)
                 if ok:
                     self.logger.info(f"Enqueued: {idx}/{total} {path}")
                     enqueued.append(path)

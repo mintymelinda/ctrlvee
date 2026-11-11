@@ -321,13 +321,13 @@ class PlaySearchView(discord.ui.View):
 
         playback_cog = self.cog.bot.get_cog("PlaybackCommands")
         if playback_cog:
-            allowed, reason = playback_cog._playback_guard(interaction.user)
+            allowed, reason = await playback_cog._playback_guard(interaction.user)
             if not allowed:
                 await interaction.response.send_message(reason, ephemeral=True)
                 return
 
         item_id = item.get("id")
-        if not item_id or not self.cog.vlc.play_item(item_id):
+        if not item_id or not await self.cog.vlc.run_async("play_item", item_id):
             await interaction.response.send_message(
                 "Could not play the selected item.", ephemeral=True
             )
@@ -361,16 +361,16 @@ class PlaylistCommands(commands.Cog):
         self.tmdb = tmdb_service
         self.watch_service = watch_service
 
-    def _get_playlist_items(self) -> List[dict]:
+    async def _get_playlist_items(self) -> List[dict]:
         """Get current playlist items"""
-        playlist_xml = self.vlc.get_playlist()
+        playlist_xml = await self.vlc.run_async("get_playlist")
         if playlist_xml is not None:
             return playlist_xml.findall('.//leaf')
         return []
 
-    def _find_item_by_id(self, item_id: str) -> Tuple[Optional[dict], int]:
+    async def _find_item_by_id(self, item_id: str) -> Tuple[Optional[dict], int]:
         """Find an item and its index in the playlist by ID"""
-        items = self._get_playlist_items()
+        items = await self._get_playlist_items()
         for i, item in enumerate(items):
             if item.get('id') == item_id:
                 return item, i
@@ -457,7 +457,7 @@ class PlaylistCommands(commands.Cog):
 
         return max(0, score)
 
-    def _search_items(self, query: str) -> List[Tuple[int, dict]]:
+    async def _search_items(self, query: str) -> List[Tuple[int, dict]]:
         """Search for items in the playlist
         
         Args:
@@ -466,7 +466,7 @@ class PlaylistCommands(commands.Cog):
         Returns:
             List of tuples (position, item) where position is 1-based index
         """
-        items = self._get_playlist_items()
+        items = await self._get_playlist_items()
         query_norm, query_compact, query_tokens = self._normalize_search_text(query)
         if not query_tokens:
             return []
@@ -538,7 +538,7 @@ class PlaylistCommands(commands.Cog):
     async def search_playlist(self, ctx: commands.Context, *, query: str):
         """Search for items in the playlist"""
         try:
-            results = self._search_items(query)
+            results = await self._search_items(query)
             
             # Create embed
             embed = discord.Embed(
@@ -611,7 +611,7 @@ class PlaylistCommands(commands.Cog):
     async def play_search(self, ctx: commands.Context, *, query: str):
         """Search the playlist and play a unique match or show an interactive picker."""
         try:
-            results = self._search_items(query)
+            results = await self._search_items(query)
             if not results:
                 await ctx.send("No matches found in playlist")
                 return
@@ -620,12 +620,12 @@ class PlaylistCommands(commands.Cog):
                 playlist_num, item = results[0]
                 playback_cog = self.bot.get_cog("PlaybackCommands")
                 if playback_cog:
-                    allowed, reason = playback_cog._playback_guard(ctx.author)
+                    allowed, reason = await playback_cog._playback_guard(ctx.author)
                     if not allowed:
                         await ctx.send(reason)
                         return
                 item_id = item.get("id")
-                if not item_id or not self.vlc.play_item(item_id):
+                if not item_id or not await self.vlc.run_async("play_item", item_id):
                     await ctx.send("Error: Could not play the selected item")
                     return
                 if playback_cog:
@@ -646,7 +646,7 @@ class PlaylistCommands(commands.Cog):
     async def list_playlist(self, ctx: commands.Context):
         """List items in the playlist with interactive navigation"""
         try:
-            items = self._get_playlist_items()
+            items = await self._get_playlist_items()
             if not items:
                 await ctx.send('Playlist is empty')
                 return

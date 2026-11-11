@@ -199,6 +199,44 @@ class VLCControllerAsyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sorted(results), [1, 2])
         self.assertEqual(max_active, 1)
 
+    async def test_run_sync_shares_lock_with_async_operations(self):
+        controller = VLCController(queue_backup_file="unused-sync-test.json")
+        entered = threading.Event()
+        release = threading.Event()
+        state_lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def operation(value, block=False):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            if block:
+                entered.set()
+                release.wait(timeout=2)
+            else:
+                time.sleep(0.02)
+            with state_lock:
+                active -= 1
+            return value
+
+        controller.test_operation = operation
+        async_operation = asyncio.create_task(
+            controller.run_async("test_operation", "async", True)
+        )
+        self.assertTrue(await asyncio.to_thread(entered.wait, 1))
+        sync_operation = asyncio.create_task(
+            asyncio.to_thread(controller.run_sync, "test_operation", "sync")
+        )
+        await asyncio.sleep(0.03)
+        self.assertFalse(sync_operation.done())
+        release.set()
+
+        self.assertEqual(await async_operation, "async")
+        self.assertEqual(await sync_operation, "sync")
+        self.assertEqual(max_active, 1)
+
     async def test_run_async_does_not_block_the_event_loop(self):
         controller = VLCController(queue_backup_file="unused-async-test.json")
         entered = threading.Event()
