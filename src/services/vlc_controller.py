@@ -1471,6 +1471,7 @@ class VLCController:
             "item_name": info.get("item_name", "Unknown"),
             "queue_order": info.get("queue_order", 0),
             "restore_shuffle": info.get("restore_shuffle", False),
+            "media_uri": info.get("media_uri"),
         }
 
 
