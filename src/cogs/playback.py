@@ -3650,8 +3650,16 @@ class QueueManageView(discord.ui.View):
         self.total_items = len(self.ordered_items)
         self.page_count = max(1, (self.total_items + self.page_size - 1) // self.page_size)
         self.page = min(max(0, page), self.page_count - 1)
+        live_names = {
+            str(item.get("id")): item.get("name", "Unknown")
+            for item in (playlist.findall(".//leaf") if playlist is not None else [])
+            if item.get("id") is not None
+        }
         self.playlist_names = {
-            queue_id: info.get("item_name", "Unknown")
+            queue_id: live_names.get(
+                str(info.get("playlist_item_id", info.get("item_id", queue_id))),
+                info.get("item_name", "Unknown"),
+            )
             for queue_id, info in queued_items.items()
         }
         self.queue_orders = {
