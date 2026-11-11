@@ -35,7 +35,7 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(Config, "ENABLE_VOICE_JOIN", True), patch.object(
             Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
         ):
-            await cog.pause(ctx)
+            await cog.pause.callback(cog, ctx)
 
         cog._check_room.assert_awaited_once_with(ctx)
         vlc.run_async.assert_not_awaited()
