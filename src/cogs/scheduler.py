@@ -72,11 +72,19 @@ class Scheduler(commands.Cog):
         self.scheduled = self._load_schedule_backup()
         self.pre_announce_sent = set()
         self._schedule_lock = asyncio.Lock()
+        self._schedule_locks = {}
         self.check_schedules.start()
 
     def cog_unload(self):
         self.check_schedules.cancel()
         self._save_schedule_backup()
+
+    def _get_schedule_lock(self, schedule):
+        """Return the lock protecting one schedule across external operations."""
+        locks = getattr(self, "_schedule_locks", None)
+        if locks is None:
+            locks = self._schedule_locks = {}
+        return locks.setdefault(id(schedule), asyncio.Lock())
 
     def _save_schedule_backup(self):
         temporary_file = f"{SCHEDULE_BACKUP_FILE}.tmp"
@@ -376,26 +384,52 @@ class Scheduler(commands.Cog):
 
     @commands.command(name="unschedule")
     async def unschedule(self, ctx, number: int):
-        """Remove all schedules for a given movie number."""
-        save_failed = False
-        async with self._schedule_lock:
-            previous = self.scheduled
-            updated = [s for s in previous if s["number"] != number]
-            if len(updated) == len(previous):
-                removed = False
-            else:
-                self.scheduled = updated
-                removed = True
-                if not self._save_schedule_backup():
-                    self.scheduled = previous
-                    save_failed = True
+        """Remove schedules for a movie after any in-flight operation finishes."""
+        while True:
+            async with self._schedule_lock:
+                targets = [s for s in self.scheduled if s["number"] == number]
+                locks = [self._get_schedule_lock(schedule) for schedule in targets]
+            if not targets:
+                await ctx.send(f"No schedules found for movie #{number}.")
+                return
 
-        if save_failed:
-            await ctx.send("❌ Could not save the schedule changes. No schedules were removed.")
-        elif not removed:
-            await ctx.send(f"No schedules found for movie #{number}.")
-        else:
-            await ctx.send(f"Removed all schedules for movie #{number}.")
+            acquired = []
+            try:
+                for lock in locks:
+                    await lock.acquire()
+                    acquired.append(lock)
+
+                missing = False
+                save_failed = False
+                async with self._schedule_lock:
+                    current = [s for s in self.scheduled if s["number"] == number]
+                    if not current:
+                        missing = True
+                    elif any(not any(s is target for target in targets) for s in current):
+                        # A matching schedule was added while locks were being
+                        # acquired. Retry with a complete, current lock set.
+                        continue
+                    else:
+                        previous = self.scheduled
+                        self.scheduled = [s for s in previous if s["number"] != number]
+                        if not self._save_schedule_backup():
+                            self.scheduled = previous
+                            save_failed = True
+                        else:
+                            for schedule in current:
+                                getattr(self, "_schedule_locks", {}).pop(id(schedule), None)
+                if missing:
+                    await ctx.send(f"No schedules found for movie #{number}.")
+                elif save_failed:
+                    await ctx.send(
+                        "❌ Could not save the schedule changes. No schedules were removed."
+                    )
+                else:
+                    await ctx.send(f"Removed all schedules for movie #{number}.")
+                return
+            finally:
+                for lock in reversed(acquired):
+                    lock.release()
 
     def _retry_schedule(self, schedule, now, reason):
         """Persist a bounded exponential retry without discarding the due job."""
@@ -570,13 +604,12 @@ class Scheduler(commands.Cog):
         return "announcing"
 
     async def _pre_announce_schedule(self, schedule):
-        """Deliver the ten-minute reminder once per channel, persisting successes."""
+        """Deliver reminders without holding the global schedule-list lock."""
         from src.config import Config
 
         channel_ids = set(Config.get_announce_channel_ids() or [])
         if schedule.get("channel"):
             channel_ids.add(schedule["channel"])
-        sent_channels = set(schedule.get("pre_announce_sent_channels", []))
         role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
         mention = f'<@&{role_id}>' if role_id else ''
         message = (
@@ -584,7 +617,13 @@ class Scheduler(commands.Cog):
             f"({schedule.get('title', 'Unknown')}) will start in 10 minutes!"
         ).strip()
 
-        for channel_id in sorted(channel_ids - sent_channels):
+        for channel_id in sorted(channel_ids):
+            async with self._schedule_lock:
+                sent_channels = set(schedule.get("pre_announce_sent_channels", []))
+                if channel_id in sent_channels:
+                    continue
+                if not any(entry is schedule for entry in self.scheduled):
+                    return
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 try:
@@ -598,26 +637,28 @@ class Scheduler(commands.Cog):
             except Exception:
                 continue
 
-            sent_channels.add(channel_id)
-            schedule["pre_announce_sent_channels"] = sorted(sent_channels)
-            if not self._save_schedule_backup():
-                logger.error(
-                    "Could not persist reminder delivery for scheduled movie '%s' and channel %s",
-                    schedule.get("title", "Unknown"), channel_id,
-                )
+            async with self._schedule_lock:
+                sent_channels = set(schedule.get("pre_announce_sent_channels", []))
+                sent_channels.add(channel_id)
+                schedule["pre_announce_sent_channels"] = sorted(sent_channels)
+                if not self._save_schedule_backup():
+                    logger.error(
+                        "Could not persist reminder delivery for scheduled movie '%s' and channel %s",
+                        schedule.get("title", "Unknown"), channel_id,
+                    )
 
-        if channel_ids and channel_ids.issubset(sent_channels):
-            self.pre_announce_sent.add((schedule["number"], schedule["dt"]))
+        async with self._schedule_lock:
+            sent_channels = set(schedule.get("pre_announce_sent_channels", []))
+            if channel_ids and channel_ids.issubset(sent_channels):
+                self.pre_announce_sent.add((schedule["number"], schedule["dt"]))
 
     async def _announce_schedule_started(self, schedule):
-        """Persist successful per-channel start announcements and retry failures."""
+        """Deliver start notices outside the global lock; persist each success."""
         from src.config import Config
 
         channel_ids = set(Config.get_announce_channel_ids() or [])
         if schedule.get("channel"):
             channel_ids.add(schedule["channel"])
-        sent_channels = set(schedule.get("started_announcement_sent_channels", []))
-        metadata_channels = set(schedule.get("started_metadata_sent_channels", []))
         role_id = getattr(Config, "WATCH_ANNOUNCE_ROLE_ID", 0)
         mention = f'<@&{role_id}>' if role_id else ''
         message = (
@@ -644,6 +685,11 @@ class Scheduler(commands.Cog):
                 )
 
         for channel_id in sorted(channel_ids):
+            async with self._schedule_lock:
+                if not any(entry is schedule for entry in self.scheduled):
+                    return False
+                sent_channels = set(schedule.get("started_announcement_sent_channels", []))
+                metadata_channels = set(schedule.get("started_metadata_sent_channels", []))
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 try:
@@ -658,39 +704,48 @@ class Scheduler(commands.Cog):
                     await channel.send(message)
                 except Exception:
                     continue
-                sent_channels.add(channel_id)
-                schedule["started_announcement_sent_channels"] = sorted(sent_channels)
-                if not self._save_schedule_backup():
-                    logger.error(
-                        "Could not persist start announcement for scheduled movie '%s' "
-                        "and channel %s",
-                        schedule.get("title", "Unknown"), channel_id,
-                    )
+                async with self._schedule_lock:
+                    sent_channels = set(schedule.get("started_announcement_sent_channels", []))
+                    sent_channels.add(channel_id)
+                    schedule["started_announcement_sent_channels"] = sorted(sent_channels)
+                    if not self._save_schedule_backup():
+                        logger.error(
+                            "Could not persist start announcement for scheduled movie '%s' and channel %s",
+                            schedule.get("title", "Unknown"), channel_id,
+                        )
 
             if embed is not None and channel_id not in metadata_channels:
                 try:
                     await channel.send(embed=embed)
                 except Exception:
                     continue
-                metadata_channels.add(channel_id)
-                schedule["started_metadata_sent_channels"] = sorted(metadata_channels)
-                if not self._save_schedule_backup():
-                    logger.error(
-                        "Could not persist metadata announcement for scheduled movie '%s' "
-                        "and channel %s",
-                        schedule.get("title", "Unknown"), channel_id,
-                    )
+                async with self._schedule_lock:
+                    metadata_channels = set(schedule.get("started_metadata_sent_channels", []))
+                    metadata_channels.add(channel_id)
+                    schedule["started_metadata_sent_channels"] = sorted(metadata_channels)
+                    if not self._save_schedule_backup():
+                        logger.error(
+                            "Could not persist metadata announcement for scheduled movie '%s' and channel %s",
+                            schedule.get("title", "Unknown"), channel_id,
+                        )
 
-        if not channel_ids.issubset(sent_channels):
-            return False
-        if embed is not None and not channel_ids.issubset(metadata_channels):
-            return False
+        async with self._schedule_lock:
+            sent_channels = set(schedule.get("started_announcement_sent_channels", []))
+            metadata_channels = set(schedule.get("started_metadata_sent_channels", []))
+            if not channel_ids.issubset(sent_channels):
+                return False
+            if embed is not None and not channel_ids.issubset(metadata_channels):
+                return False
 
-        self.scheduled = [entry for entry in self.scheduled if entry is not schedule]
-        if not self._save_schedule_backup():
-            self.scheduled.append(schedule)
-            return False
-        return True
+            if not any(entry is schedule for entry in self.scheduled):
+                return True
+            previous = self.scheduled
+            self.scheduled = [entry for entry in previous if entry is not schedule]
+            if not self._save_schedule_backup():
+                self.scheduled = previous
+                return False
+            getattr(self, "_schedule_locks", {}).pop(id(schedule), None)
+            return True
 
     @tasks.loop(seconds=30)
     async def check_schedules(self):
@@ -703,22 +758,38 @@ class Scheduler(commands.Cog):
             except Exception as exc:
                 logger.error("Error resolving scheduled items: %s", exc)
                 resolved = {}
+            schedules = list(self.scheduled)
+            schedule_locks = [
+                (schedule, self._get_schedule_lock(schedule))
+                for schedule in schedules
+            ]
 
-            # Pre-announce schedules within ten minutes. This is intentionally
-            # separate from execution retry state.
-            for schedule in list(self.scheduled):
-                pre_announce_key = (schedule["number"], schedule["dt"])
-                if pre_announce_key in self.pre_announce_sent:
-                    continue
-                delta = (schedule["dt"] - now).total_seconds()
-                if not 0 < delta <= 600:
-                    continue
-                await self._pre_announce_schedule(schedule)
+        # A per-schedule lock protects an operation from unschedule/re-entry.
+        # The global lock is only held for snapshots and durable state changes;
+        # Discord fetch/send awaits never hold it.
+        for schedule, operation_lock in schedule_locks:
+            async with operation_lock:
+                async with self._schedule_lock:
+                    if not any(entry is schedule for entry in self.scheduled):
+                        continue
+                    delta = (schedule["dt"] - now).total_seconds()
+                    should_pre_announce = 0 < delta <= 600
+                    should_execute = schedule["dt"] <= now
+                    if should_execute:
+                        outcome = self._execute_due_schedule(
+                            schedule, resolved.get(id(schedule), (None, None))[1], now
+                        )
+                    else:
+                        outcome = None
 
-            due = [schedule for schedule in self.scheduled if schedule["dt"] <= now]
-            for schedule in due:
-                outcome = self._execute_due_schedule(
-                    schedule, resolved.get(id(schedule), (None, None))[1], now
-                )
+                if should_pre_announce:
+                    async with self._schedule_lock:
+                        already_preannounced = (
+                            (schedule["number"], schedule["dt"]) in self.pre_announce_sent
+                        )
+                    if not already_preannounced:
+                        await self._pre_announce_schedule(schedule)
+
                 if outcome == "announcing":
                     await self._announce_schedule_started(schedule)
+
