@@ -3021,6 +3021,40 @@ class PlaybackCommands(commands.Cog):
             logger.error(f"Error in shuffle_toggle command: {e}")
             await ctx.send(f'Error toggling shuffle: {str(e)}')
 
+class QueuePlaylistSelect(discord.ui.Select):
+    """Select a playlist entry to add through the existing soft-queue command."""
+
+    def __init__(self, playback_view, playlist_items):
+        self.playback_view = playback_view
+        options = [
+            discord.SelectOption(
+                label=(item.get("name") or "Unknown")[:100],
+                value=str(position),
+                description=f"Playlist item #{position}",
+            )
+            for position, item in enumerate(playlist_items[:25], 1)
+        ]
+        super().__init__(
+            placeholder="Choose a track to queue next",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not _member_has_allowed_role(interaction.user, Config.ALLOWED_ROLES):
+            await interaction.response.send_message(
+                "You don't have a role permitted to control playback.",
+                ephemeral=True,
+            )
+            return
+        await self.playback_view._dispatch(
+            interaction,
+            "queue_next",
+            int(self.values[0]),
+        )
+
+
 class PlaybackControlView(discord.ui.View):
     """Short-lived interactive panel that delegates to existing guarded commands."""
 
@@ -3037,7 +3071,7 @@ class PlaybackControlView(discord.ui.View):
             return False
         return True
 
-    async def _dispatch(self, interaction: discord.Interaction, command_name: str) -> None:
+    async def _dispatch(self, interaction: discord.Interaction, command_name: str, *args) -> None:
         await interaction.response.defer(ephemeral=True)
 
         class InteractionContext:
@@ -3059,7 +3093,7 @@ class PlaybackControlView(discord.ui.View):
 
         command = getattr(self.cog, command_name)
         try:
-            await command.callback(self.cog, InteractionContext(interaction))
+            await command.callback(self.cog, InteractionContext(interaction), *args)
         except Exception:
             self.cog.logger.exception("Playback panel action failed: %s", command_name)
             await interaction.followup.send(
@@ -3108,4 +3142,27 @@ class PlaybackControlView(discord.ui.View):
     @discord.ui.button(label="View Queue", emoji="📋", style=discord.ButtonStyle.secondary, row=1)
     async def queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._dispatch(interaction, "queue_status")
+
+    @discord.ui.button(label="Add to Queue", emoji="➕", style=discord.ButtonStyle.success, row=2)
+    async def add_to_queue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            playlist = await self.cog.vlc.run_async("get_playlist")
+            playlist_items = playlist.findall(".//leaf") if playlist is not None else []
+            if not playlist_items:
+                await interaction.followup.send("The VLC playlist is empty or unavailable.", ephemeral=True)
+                return
+
+            picker = discord.ui.View(timeout=120)
+            picker.add_item(QueuePlaylistSelect(self, playlist_items))
+            message = "Choose a playlist item to add to the soft queue."
+            if len(playlist_items) > 25:
+                message += " Showing the first 25 entries; use !queue_next for later entries."
+            await interaction.followup.send(message, view=picker, ephemeral=True)
+        except Exception:
+            self.cog.logger.exception("Could not open the queue picker")
+            await interaction.followup.send(
+                "The playlist is currently unavailable.",
+                ephemeral=True,
+            )
 
