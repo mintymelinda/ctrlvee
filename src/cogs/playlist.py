@@ -327,22 +327,30 @@ class PlaySearchView(discord.ui.View):
                 return
 
         item_id = item.get("id")
-        if not item_id or not await self.cog.vlc.run_async("play_item", item_id):
+        if not item_id:
             await interaction.response.send_message(
-                "Could not play the selected item.", ephemeral=True
+                "That result no longer has a valid VLC item ID.", ephemeral=True
             )
             return
-
-        if playback_cog:
-            playback_cog._command_initiated_item_id = str(item_id)
-            playback_cog._seat_playback_owner(interaction.user, item_id)
 
         self.stop()
         await interaction.response.edit_message(
             content=f"Loading item #{playlist_num}...", embed=None, view=None
         )
+        confirmation = await self.cog._play_and_confirm_item(
+            item_id, interaction.user
+        )
+        if not confirmation.get("success"):
+            await interaction.followup.send(
+                "VLC did not confirm that selection became the current playing item.",
+                ephemeral=True,
+            )
+            return
+
         await self.cog._send_search_metadata(
-            interaction.followup.send, item, playlist_num
+            interaction.followup.send,
+            confirmation["item"],
+            confirmation["position"],
         )
 
     async def on_timeout(self) -> None:
@@ -361,6 +369,41 @@ class PlaylistCommands(commands.Cog):
         self.vlc = vlc_controller
         self.tmdb = tmdb_service
         self.watch_service = watch_service
+
+    async def _play_and_confirm_item(self, item_id: str, member=None) -> dict:
+        """Play a live playlist item and confirm it is current before publishing ownership."""
+        playback_cog = self.bot.get_cog("PlaybackCommands")
+        selected = await self.vlc.run_async("play_item_and_capture", item_id)
+        if not selected.get("success"):
+            return selected
+
+        if playback_cog:
+            playback_cog._command_initiated_item_id = str(item_id)
+
+        confirmation = None
+        for attempt in range(5):
+            await asyncio.sleep(1)
+            confirmation = await self.vlc.run_async(
+                "get_current_item_if_unchanged", item_id
+            )
+            if not confirmation.get("success"):
+                if confirmation.get("reason") == "selection_changed":
+                    break
+                continue
+            if confirmation.get("state") == "playing":
+                if playback_cog and member is not None:
+                    playback_cog._seat_playback_owner(member, item_id)
+                return confirmation
+
+        if playback_cog and playback_cog._command_initiated_item_id == str(item_id):
+            playback_cog._command_initiated_item_id = None
+        if confirmation and confirmation.get("reason") == "selection_changed":
+            return confirmation
+        return {
+            "success": False,
+            "reason": "playback_not_confirmed",
+            "item_id": str(item_id),
+        }
 
     async def _get_playlist_items(self) -> List[dict]:
         """Get current playlist items"""
@@ -626,13 +669,19 @@ class PlaylistCommands(commands.Cog):
                         await ctx.send(reason)
                         return
                 item_id = item.get("id")
-                if not item_id or not await self.vlc.run_async("play_item", item_id):
-                    await ctx.send("Error: Could not play the selected item")
+                if not item_id:
+                    await ctx.send("Error: The selected item no longer has a valid VLC item ID")
                     return
-                if playback_cog:
-                    playback_cog._seat_playback_owner(ctx.author, item_id)
                 await ctx.send(f"Loading item #{playlist_num}...")
-                await self._send_search_metadata(ctx.send, item, playlist_num)
+                confirmation = await self._play_and_confirm_item(item_id, ctx.author)
+                if not confirmation.get("success"):
+                    await ctx.send(
+                        "VLC did not confirm that selection became the current playing item."
+                    )
+                    return
+                await self._send_search_metadata(
+                    ctx.send, confirmation["item"], confirmation["position"]
+                )
                 return
 
             view = PlaySearchView(self, ctx.author.id, results)
