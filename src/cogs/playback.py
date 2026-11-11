@@ -2045,24 +2045,43 @@ class PlaybackCommands(commands.Cog):
                 await ctx.send(f'Loading item #{number}...')
                 await asyncio.sleep(3)  # Give VLC time to load and start playing the file
                 
-                status = await self.vlc.run_async("get_status")
-                if not status:
+                recovery = await self.vlc.run_async(
+                    "resume_selected_item_if_current", item_id
+                )
+                if recovery["reason"] == "playlist_unavailable" or recovery["reason"] == "status_unavailable":
                     await ctx.send(f'Started playing item #{number}')
                     return
-                    
-                state = status.find('state').text
-                if state != 'playing':
-                    # If not playing yet, try to start playback
-                    await self.vlc.run_async("play")
+                if recovery["reason"] == "selection_changed":
+                    logger.info(
+                        "Skipping delayed play recovery for item %s; VLC selection changed to %s",
+                        item_id,
+                        recovery.get("current_item_id"),
+                    )
+                    return
+
+                if recovery.get("state") != "playing":
+                    # Retry only if this item is still current; never issue a generic pl_play.
                     await asyncio.sleep(2)
-                    status = await self.vlc.run_async("get_status")
-                    if status:
-                        state = status.find('state').text
-                        if state != 'playing':
-                            # One more try
-                            await self.vlc.run_async("play")
-                            await asyncio.sleep(1)
-                
+                    recovery = await self.vlc.run_async(
+                        "resume_selected_item_if_current", item_id
+                    )
+                    if recovery["reason"] == "selection_changed":
+                        logger.info(
+                            "Skipping playback retry for item %s; VLC selection changed",
+                            item_id,
+                        )
+                        return
+                    await asyncio.sleep(1)
+                    recovery = await self.vlc.run_async(
+                        "resume_selected_item_if_current", item_id, resume=False
+                    )
+                    if recovery["reason"] == "selection_changed":
+                        logger.info(
+                            "Skipping playback announcement for item %s; VLC selection changed",
+                            item_id,
+                        )
+                        return
+
                 # Announce now playing via unified announcer
                 await self._announce_now_playing('command', item, number)
                 
