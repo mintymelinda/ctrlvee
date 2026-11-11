@@ -368,7 +368,11 @@ class RealVLCIntegrationTests(unittest.TestCase):
         item_id = item.get("id")
         self.assertTrue(item_id, "VLC playlist item did not expose a stable ID")
 
-        self.assertIsNotNone(self.controller.play_item(item_id))
+        # VLC may execute a command while returning an empty/non-XML response;
+        # verify the selected playlist item instead of treating the HTTP body as
+        # the playback acknowledgement.
+        self.controller.play_item(item_id)
+        self.wait_for_current_item(item_id)
         playing = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
