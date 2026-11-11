@@ -886,10 +886,14 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         )
         view._dispatch = AsyncMock()
 
-        select._values = ["shuffle"]
-        await select.callback(interaction)
-
-        view._dispatch.assert_awaited_once_with(interaction, "shuffle_toggle")
+        for action, command in (
+            ("view_queue", "queue_status"),
+            ("shuffle", "shuffle_toggle"),
+        ):
+            view._dispatch.reset_mock()
+            select._values = [action]
+            await select.callback(interaction)
+            view._dispatch.assert_awaited_once_with(interaction, command)
 
     async def test_management_menu_routes_queue_tools_to_existing_handlers(self):
         view = PlaybackControlView(Mock())
