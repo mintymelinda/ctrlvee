@@ -22,6 +22,42 @@ Current app version: `1.9.17`.
 - A Discord bot token
 - TMDB API key (recommended; required for full metadata features)
 
+## Docker Deployment
+
+CtrlVee can run in a lightweight container while controlling VLC on another machine. The bot does **not** encode or relay the video stream: VLC on your media server continues to read and play the media. CtrlVee sends playback commands and reads status through VLC's HTTP interface.
+
+For a split setup with VLC on a LAN host (for example, `192.168.0.15`) and CtrlVee on a NAS:
+
+1. Enable VLC's Web interface on the Plex server and configure its HTTP password.
+2. Make the VLC HTTP interface reachable from the NAS/container on the LAN. Restrict access with the Plex server firewall to your NAS; do not expose the VLC control port to the public internet.
+3. Copy `template.env` to `.env`, then set `DISCORD_TOKEN`, `TMDB_API_KEY`, `ALLOWED_ROLES`, and `VLC_HOST=192.168.0.15`. Set `VLC_PASSWORD` to the password configured in VLC.
+4. Create the persistent data directory and make it writable by the container user. The defaults below use UID/GID 1000; change `PUID` and `PGID` in `.env` if your NAS uses different IDs.
+5. Start CtrlVee:
+
+```bash
+cp template.env .env
+mkdir -p data
+# Edit .env before starting; set the Discord/TMDB credentials and VLC_HOST.
+docker compose up -d --build
+docker compose logs -f ctrlvee
+```
+
+Stop the service with `docker compose down`. Its state remains in `./data`; restarting or recreating the container does not remove that directory.
+
+The Compose deployment stores queue backups, scheduled items, playlist autosaves, watch statistics, and the Discord playback-panel registry under `/app/data` in the container, backed by `./data` on the NAS.
+
+### Media paths for schedules and watch folders
+
+Normal playback control works with media already loaded in the remote VLC playlist; the bot does not need to mount the video library just to send Play/Pause/Next commands.
+
+For watch-folder scanning and schedule file-existence checks, however, CtrlVee must be able to see the media files. Mount the relevant Plex-server media folders into the container **at the same absolute paths VLC uses**, preferably read-only, then set `WATCH_FOLDERS` to those container paths in `.env`. The Compose file includes commented examples to adapt. If you do not use watch folders or scheduling, these media mounts are unnecessary.
+
+### Docker files
+
+- `Dockerfile` builds the Python bot image; VLC itself is not installed in the bot container.
+- `compose.yaml` starts the bot with restart policy, a read-only application filesystem, and persistent state.
+- `.dockerignore` keeps local environments, credentials, and data out of the image.
+
 ## Quick Setup
 
 1. Clone this repository.
