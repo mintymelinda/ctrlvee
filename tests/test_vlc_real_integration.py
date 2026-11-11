@@ -8,8 +8,6 @@ import unittest
 import wave
 from pathlib import Path
 
-import requests
-
 from src.services.vlc_controller import VLCController
 
 
@@ -68,35 +66,46 @@ class RealVLCIntegrationTests(unittest.TestCase):
             env=environment,
         )
 
-        base_url = f"http://127.0.0.1:{cls.port}"
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            if cls.process.poll() is not None:
-                cls.log_file.flush()
-                cls.log_file.seek(0)
-                raise RuntimeError(f"VLC exited during startup:\n{cls.log_file.read()}")
-            try:
-                response = requests.get(
-                    f"{base_url}/requests/status.xml",
-                    auth=("", cls.password),
-                    timeout=0.5,
-                )
-                if response.status_code == 200:
-                    break
-            except requests.RequestException:
-                pass
-            time.sleep(0.2)
-        else:
-            cls.log_file.flush()
-            cls.log_file.seek(0)
-            raise RuntimeError(f"VLC HTTP interface did not become ready:\n{cls.log_file.read()}")
-
         cls.controller = VLCController(
             host="127.0.0.1",
             port=cls.port,
             password=cls.password,
             queue_backup_file=str(cls.temp_path / "queue.json"),
         )
+
+        # A single HTTP 200 from VLC is not sufficient readiness: the server
+        # can begin accepting requests before both XML endpoints are stable.
+        # Require consecutive successful parses through the same controller
+        # path used by the tests before allowing any test to run.
+        deadline = time.monotonic() + 20
+        consecutive_successes = 0
+        last_status = None
+        last_playlist = None
+        while time.monotonic() < deadline:
+            if cls.process.poll() is not None:
+                break
+
+            last_status = cls.controller.get_status()
+            last_playlist = cls.controller.get_playlist()
+            if last_status is not None and last_playlist is not None:
+                consecutive_successes += 1
+                if consecutive_successes >= 3:
+                    break
+            else:
+                consecutive_successes = 0
+            time.sleep(0.2)
+        else:
+            consecutive_successes = 0
+
+        if consecutive_successes < 3:
+            cls.log_file.flush()
+            cls.log_file.seek(0)
+            raise RuntimeError(
+                "VLC HTTP interface did not become stable "
+                f"(status parsed: {last_status is not None}, "
+                f"playlist parsed: {last_playlist is not None}, "
+                f"process exit: {cls.process.poll()}):\\n{cls.log_file.read()}"
+            )
 
     @classmethod
     def tearDownClass(cls):
