@@ -6,11 +6,18 @@ import discord
 class VoiceChannelService:
     """Move CtrlVee into the voice channel of a playback-command requester."""
 
-    def __init__(self, bot, connect_timeout: float = 20.0):
+    def __init__(self, bot, connect_timeout: float = 20.0, connection_lock=None):
         self.bot = bot
         self.connect_timeout = connect_timeout
+        self._connection_lock = connection_lock
         self._guild_locks: dict[int, asyncio.Lock] = {}
         self._target_channel_ids: dict[int, int] = {}
+
+    def _lock_for_guild(self, guild_id: int) -> asyncio.Lock:
+        """Reuse the bot's shared voice lock when supplied, otherwise isolate by guild."""
+        if self._connection_lock is not None:
+            return self._connection_lock
+        return self._guild_locks.setdefault(guild_id, asyncio.Lock())
 
     def get_target_channel(self, guild):
         """Return the last command-selected channel for reconnect handling."""
@@ -47,7 +54,7 @@ class VoiceChannelService:
             return False, "That voice channel is unavailable."
 
         guild_id = guild.id
-        lock = self._guild_locks.setdefault(guild_id, asyncio.Lock())
+        lock = self._lock_for_guild(guild_id)
         async with lock:
             bot_member = getattr(guild, "me", None)
             if bot_member is None:
