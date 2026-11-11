@@ -284,7 +284,8 @@ class StreamManagerCommands(commands.Cog):
             if member.bot:
                 await ctx.send("The stream manager must be a human Discord user.")
                 return
-            self.assignments[key] = {"user_id": member.id, "channel_id": ctx.channel.id}
+            existing_host_id = self.assignments.get(key, {}).get("host_user_id", member.id)
+            self.assignments[key] = {"user_id": member.id, "host_user_id": existing_host_id, "channel_id": ctx.channel.id}
             self._alerted_guilds.discard(ctx.guild.id)
             try:
                 self._save_assignments()
