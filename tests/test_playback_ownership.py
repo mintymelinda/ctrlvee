@@ -16,6 +16,7 @@ from src.cogs.playback import (
     QueueClearConfirmView,
     QueuePlaylistSelect,
     QueuePlaylistView,
+    QueueManageSelect,
     QueueManageView,
     _decide_playback_allow,
     _member_has_allowed_role,
