@@ -122,6 +122,7 @@ class VLCControllerTests(unittest.TestCase):
             result = self.controller.play_next_or_advance()
         self.assertIs(result["queued_result"], queued)
         self.assertFalse(result["next_success"])
+        self.assertEqual(result["expected_item_id"], "1")
         next_track.assert_not_called()
 
     def test_set_shuffle_state_only_toggles_when_needed(self):

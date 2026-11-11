@@ -219,7 +219,9 @@ class VLCController:
             return {
                 "queued_result": queued_result,
                 "next_success": False,
-                "expected_item_id": str(queued_result["item_id"]),
+                "expected_item_id": str(
+                    queued_result.get("item_id") or queued_item.get("item_id")
+                ) if queued_result.get("item_id") or queued_item.get("item_id") else None,
             }
         next_result = self.next()
         if not next_result:
