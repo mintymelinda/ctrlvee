@@ -121,15 +121,18 @@ class Scheduler(commands.Cog):
 
         playlist = await self.vlc.run_async("get_playlist")
         items = playlist.findall(".//leaf") if playlist is not None else []
+        indices = await asyncio.gather(*(
+            asyncio.to_thread(_resolve_schedule_index, schedule, items, self._uri_exists)
+            for schedule in due
+        ))
         resolved = {}
         async with self._schedule_lock:
             changed = False
             previous_states = {}
             changed_schedules = set()
-            for schedule in due:
+            for schedule, index in zip(due, indices):
                 if not any(entry is schedule for entry in self.scheduled):
                     continue
-                index = await asyncio.to_thread(_resolve_schedule_index, schedule, items, self._uri_exists)
                 resolved[id(schedule)] = (index, items[index] if index is not None else None)
                 if index is None:
                     continue

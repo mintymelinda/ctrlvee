@@ -1431,6 +1431,10 @@ class VLCController:
         self._save_queue_backup()
         self.logger.debug(f"Queue state saved after removing item {item_id}")
 
+    def finish_queued_item(self, item_id):
+        """Public serialized-operation entry point for queue completion cleanup."""
+        return self._handle_queued_item_finished(item_id)
+
     def _handle_queued_item_finished(self, item_id):
         """
         Handle when a queued item finishes playing (track ends naturally)
