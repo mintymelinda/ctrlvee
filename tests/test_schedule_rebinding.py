@@ -400,7 +400,7 @@ class ScheduledPlaybackLifecycleTests(unittest.IsolatedAsyncioTestCase):
         playlist.append(current)
         vlc.get_playlist.return_value = playlist
         scheduler = self.make_scheduler(schedule, vlc)
-        scheduler._save_schedule_backup.side_effect = [True, False]
+        scheduler._save_schedule_backup.side_effect = [True, True, False]
 
         outcome = await scheduler._execute_due_schedule(
             schedule, leaf("Heat (1995).mkv"), datetime.now(PH_TZ)
