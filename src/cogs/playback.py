@@ -32,6 +32,15 @@ def _decide_playback_allow(
         return False, "hijack"
     return True, ""
 
+def _format_progress_bar(current_seconds: int, total_seconds: int, width: int = 16) -> str:
+    """Render a bounded text progress bar for the Discord Now Playing embed."""
+    if total_seconds <= 0 or width <= 0:
+        return ""
+    current_seconds = max(0, min(int(current_seconds), int(total_seconds)))
+    filled = min(width, int(current_seconds / total_seconds * width))
+    return f"[{'█' * filled}{'░' * (width - filled)}]"
+
+
 def _member_has_allowed_role(member, allowed_roles) -> bool:
     """Match configured role names and IDs for interaction-based controls."""
     member_roles = getattr(member, "roles", ())
@@ -1826,7 +1835,8 @@ class PlaybackCommands(commands.Cog):
             if not status:
                 return None
 
-            state = status.find('state').text
+            state_element = status.find("state")
+            state = state_element.text.strip().lower() if state_element is not None and state_element.text else "unavailable"
             
             playlist = await self.vlc.run_async("get_playlist")
             position, current_item = self._find_current_position(playlist)
@@ -1955,12 +1965,22 @@ class PlaybackCommands(commands.Cog):
                         pass
 
             # Add playback state and position
-            state_emoji_map = {
-                'playing': '▶️',
-                'paused': '⏸️',
-                'stopped': '⏹️'
+            state_display = {
+                "playing": ("▶️", "Playing"),
+                "paused": ("⏸️", "Paused"),
+                "stopped": ("⏹️", "Stopped"),
+                "buffering": ("⏳", "Loading"),
+                "opening": ("⏳", "Loading"),
+                "loading": ("⏳", "Loading"),
+                "error": ("⚠️", "Unavailable"),
+                "unavailable": ("⚠️", "Unavailable"),
+                "": ("⚠️", "Unavailable"),
             }
-            state_text = f"{state_emoji_map.get(state, '')} {state.capitalize()}".strip()
+            state_emoji, state_label = state_display.get(
+                state,
+                ("ℹ️", state.replace("_", " ").capitalize()),
+            )
+            state_text = f"{state_emoji} {state_label}"
             
             if position and item_name:
                 final_embed.add_field(name="Playlist", value=f"#{position}", inline=True)
@@ -1975,7 +1995,12 @@ class PlaybackCommands(commands.Cog):
                     current_time = int(time_elem.text)
                     total_time = int(length_elem.text)
                     if total_time > 0:
-                        progress = f"{MediaUtils.format_time(current_time)} / {MediaUtils.format_time(total_time)}"
+                        progress_bar = _format_progress_bar(current_time, total_time)
+                        progress = (
+                            f"{progress_bar}\n"
+                            f"**{MediaUtils.format_time(current_time)} / "
+                            f"{MediaUtils.format_time(total_time)}**"
+                        )
                         final_embed.add_field(name="Progress", value=progress, inline=False)
                 except (ValueError, TypeError):
                     pass # Ignore if time/length are not valid numbers
