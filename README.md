@@ -160,7 +160,6 @@ Edit `.env` (starting from `template.env`).
 - `VOICE_JOIN_CHANNEL_ID`
 - `VOICE_AUTO_JOIN_ON_START`
 - `VOICE_AUTO_JOIN_ON_COMMAND` (default: `false`) — when enabled, a playback command from a user already in a voice channel makes CtrlVee join or move to that user's channel before applying the existing playback permission and ownership checks. The bot requires View Channel and Connect permissions there.
-- `VOICE_AUTO_JOIN_ON_COMMAND` — when enabled, playback commands move the bot into the command author's current voice channel (requires the author to already be in voice)
 - `VOICE_MAX_RECONNECTS`
 - `VOICE_RECONNECT_WINDOW`
 - `VOICE_RECONNECT_COOLDOWN`
