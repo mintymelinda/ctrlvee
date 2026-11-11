@@ -68,6 +68,7 @@ class VoiceChannelServiceTests(unittest.IsolatedAsyncioTestCase):
         voice_client = Mock()
         voice_client.is_connected.return_value = True
         voice_client.channel = self.channel
+        voice_client.move_to = AsyncMock()
         self.guild.voice_client = voice_client
 
         success, reason = await self.service.join_channel(self.channel)
