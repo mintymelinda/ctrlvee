@@ -1627,6 +1627,62 @@ class VLCController:
             "shuffle_currently_on": self.get_shuffle_state()
         }
     
+    def reconcile_queue_with_playlist(self):
+        """Drop persisted soft-queue entries that no longer exist in VLC.
+
+        A missing playlist response is not evidence that the playlist is empty:
+        leave the saved queue untouched so a temporary VLC outage cannot erase it.
+        """
+        playlist = self.get_playlist()
+        if playlist is None:
+            return {
+                "success": False,
+                "reason": "playlist_unavailable",
+                "removed_item_ids": [],
+                "remaining": len(self._queued_items),
+            }
+
+        live_items = {
+            str(item.get("id")): item
+            for item in playlist.findall(".//leaf")
+            if item.get("id") is not None
+        }
+        removed_item_ids = []
+        for item_id, queue_info in list(self._queued_items.items()):
+            if str(item_id) not in live_items or not isinstance(queue_info, dict):
+                removed_item_ids.append(str(item_id))
+                self._queued_items.pop(item_id, None)
+
+        # A shuffle-restore marker is meaningful only while its item remains
+        # queued. Keep order and remove duplicates from older backup files.
+        valid_restore_ids = []
+        seen_restore_ids = set()
+        for item_id in self._shuffle_restore_queue:
+            normalized_id = str(item_id)
+            if normalized_id in self._queued_items and normalized_id not in seen_restore_ids:
+                valid_restore_ids.append(normalized_id)
+                seen_restore_ids.add(normalized_id)
+        self._shuffle_restore_queue = valid_restore_ids
+
+        self._compact_queue_order()
+        if self._pending_queue_item_id is not None and str(self._pending_queue_item_id) not in self._queued_items:
+            self._pending_queue_item_id = None
+            self._pending_queue_started_at = None
+
+        self._save_queue_backup()
+        return {
+            "success": True,
+            "removed_item_ids": removed_item_ids,
+            "remaining": len(self._queued_items),
+            "queued_item_ids": [
+                item_id
+                for item_id, _ in sorted(
+                    self._queued_items.items(),
+                    key=lambda entry: entry[1].get("queue_order", 0),
+                )
+            ],
+        }
+
     def clear_queue_tracking(self):
         """Clear all queue tracking state (useful for reset/cleanup)"""
         self._queued_items.clear()
