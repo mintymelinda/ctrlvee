@@ -94,6 +94,57 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["item"].get("name"), "Selected")
         play.assert_called_once_with("selected")
 
+    def test_scheduled_playback_refuses_to_override_a_manual_selection(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="scheduled"/><leaf id="manual" current="current"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "play_item"
+        ) as play:
+            result = self.controller.play_scheduled_item_if_unchanged("scheduled", "previous")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["reason"], "playback_changed")
+        self.assertEqual(result["current_item_id"], "manual")
+        play.assert_not_called()
+
+    def test_scheduled_playback_confirms_only_a_playing_target(self):
+        before = ET.fromstring(
+            '<playlist><leaf id="current" current="current"/><leaf id="scheduled"/></playlist>'
+        )
+        after = ET.fromstring(
+            '<playlist><leaf id="current"/><leaf id="scheduled" current="current"/></playlist>'
+        )
+        status = ET.fromstring("<root><state>playing</state></root>")
+        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
+            self.controller, "get_status", return_value=status
+        ), patch.object(
+            self.controller, "play_item", return_value=ET.fromstring("<root><ok/></root>")
+        ) as play:
+            result = self.controller.play_scheduled_item_if_unchanged("scheduled", "current")
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(result["source_item_id"], "current")
+        play.assert_called_once_with("scheduled")
+
+    def test_scheduled_playback_does_not_confirm_paused_target(self):
+        before = ET.fromstring(
+            '<playlist><leaf id="current" current="current"/><leaf id="scheduled"/></playlist>'
+        )
+        after = ET.fromstring('<playlist><leaf id="scheduled" current="current"/></playlist>')
+        status = ET.fromstring("<root><state>paused</state></root>")
+        with patch.object(self.controller, "get_playlist", side_effect=[before, after]), patch.object(
+            self.controller, "get_status", return_value=status
+        ), patch.object(
+            self.controller, "play_item", return_value=ET.fromstring("<root><ok/></root>")
+        ):
+            result = self.controller.play_scheduled_item_if_unchanged("scheduled", "current")
+
+        self.assertTrue(result["success"])
+        self.assertFalse(result["confirmed"])
+        self.assertEqual(result["reason"], "awaiting_confirmation")
+
     def test_resume_selected_item_only_targets_the_still_current_item(self):
         playlist = ET.fromstring('<playlist><leaf id="selected" current="current"/></playlist>')
         status = ET.fromstring("<root><state>paused</state></root>")
