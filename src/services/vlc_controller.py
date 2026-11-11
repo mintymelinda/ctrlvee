@@ -142,6 +142,43 @@ class VLCController:
             return {"success": False, "error": "item_id_missing"}
         return {"success": bool(self.play_item(item_id)), "item": item, "item_id": item_id, "playlist_count": len(items)}
 
+    def resume_selected_item_if_current(self, expected_item_id: str):
+        """Resume only the playlist item selected by the caller, if it is still current.
+
+        Delayed command recovery must not use the generic pl_play command: another
+        caller may have selected a different item while the command was waiting.
+        This check and the item-specific play command run under the shared lock.
+        """
+        playlist = self.get_playlist()
+        if playlist is None:
+            return {"success": False, "reason": "playlist_unavailable", "state": None}
+        current_item = next(
+            (item for item in playlist.findall(".//leaf") if item.get("current")),
+            None,
+        )
+        current_item_id = current_item.get("id") if current_item is not None else None
+        if str(current_item_id) != str(expected_item_id):
+            return {
+                "success": False,
+                "reason": "selection_changed",
+                "current_item_id": current_item_id,
+                "state": None,
+            }
+
+        status = self.get_status()
+        if status is None:
+            return {"success": False, "reason": "status_unavailable", "state": None}
+        state = status.findtext("state")
+        if state == "playing":
+            return {"success": True, "reason": "already_playing", "state": state}
+
+        result = self.play_item(expected_item_id)
+        return {
+            "success": result is not None,
+            "reason": "resume_sent" if result is not None else "resume_failed",
+            "state": state,
+        }
+
     def queue_playlist_item_at_position(self, position: int):
         """Resolve a playlist position and add it to the soft queue atomically."""
         playlist = self.get_playlist()
