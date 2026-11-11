@@ -87,6 +87,47 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(allowed)
         self.assertEqual(reason, "")
 
+
+    def test_clear_command_initiated_item_only_clears_matching_selection(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog._command_initiated_item_id = "expected"
+
+        cog._clear_command_initiated_item("different")
+        self.assertEqual(cog._command_initiated_item_id, "expected")
+
+        cog._clear_command_initiated_item("expected")
+        self.assertIsNone(cog._command_initiated_item_id)
+
+    async def test_play_num_fails_closed_when_vlc_state_is_unavailable(self):
+        cog = PlaybackCommands.__new__(PlaybackCommands)
+        cog._playback_guard = AsyncMock(return_value=(True, ""))
+        cog._command_initiated_item_id = None
+        cog._clear_command_initiated_item = PlaybackCommands._clear_command_initiated_item.__get__(
+            cog, PlaybackCommands
+        )
+        cog.vlc = SimpleNamespace(
+            run_async=AsyncMock(side_effect=[
+                {"success": True, "item_id": "42", "item": SimpleNamespace(get=lambda _key: "Track")},
+                {"success": False, "reason": "status_unavailable", "state": None},
+            ])
+        )
+        cog._seat_playback_owner = unittest.mock.Mock()
+        cog._announce_now_playing = AsyncMock()
+        ctx = SimpleNamespace(
+            author=SimpleNamespace(id=7),
+            send=AsyncMock(),
+        )
+
+        with patch("src.cogs.playback.asyncio.sleep", new=AsyncMock()):
+            await PlaybackCommands.play_number.callback(cog, ctx, 3)
+
+        messages = [call.args[0] for call in ctx.send.await_args_list]
+        self.assertTrue(any("could not be confirmed" in message for message in messages))
+        self.assertFalse(any(message.startswith("Started playing") for message in messages))
+        self.assertIsNone(cog._command_initiated_item_id)
+        cog._seat_playback_owner.assert_not_called()
+        cog._announce_now_playing.assert_not_awaited()
+
     async def test_unresolvable_configured_room_fails_closed(self):
         guild = SimpleNamespace(get_member=lambda _user_id: None)
         requester = SimpleNamespace(id=2, guild=guild, voice=None)
