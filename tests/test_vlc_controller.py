@@ -27,6 +27,8 @@ class VLCControllerTests(unittest.TestCase):
 
     def queue_item(self, item_id):
         with patch.object(self.controller, "get_shuffle_state", return_value=False), patch.object(
+            self.controller, "get_current_position", return_value=0
+        ), patch.object(
             self.controller, "_parse_playlist_info", return_value=({str(item_id): {"name": str(item_id)}}, None)
         ), patch("src.services.vlc_controller.uuid.uuid4", return_value=item_id):
             result = self.controller.queue_item_next(item_id)
@@ -181,6 +183,8 @@ class VLCControllerTests(unittest.TestCase):
 
     def test_queue_entries_have_independent_ids_and_can_reference_same_vlc_item(self):
         with patch.object(self.controller, "get_shuffle_state", return_value=False), patch.object(
+            self.controller, "get_current_position", return_value=0
+        ), patch.object(
             self.controller, "_parse_playlist_info", return_value=({"vlc-42": {"name": "Repeated media"}}, None)
         ), patch("src.services.vlc_controller.uuid.uuid4", side_effect=["queue-entry-a", "queue-entry-b"]):
             first = self.controller.queue_item_next("vlc-42")
