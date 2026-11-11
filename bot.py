@@ -65,6 +65,7 @@ from src.services.watch_folder_service import WatchFolderService
 from src.utils.media_utils import MediaUtils
 from src.services.radarr_service import RadarrService
 from src.services.stats_service import StatsService
+from src.services.voice_channel_service import VoiceChannelService
 
 vlc = VLCController(bot=bot)
 tmdb_service = TMDBService()
@@ -145,7 +146,7 @@ def _build_privacy_embed() -> discord.Embed:
         value=(
             "• Message content (for command parsing only, via Message Content Intent)\n"
             "• Basic Discord metadata needed to execute commands (user ID, guild ID, channel ID, role checks)\n"
-            "• Voice state and channel info if voice auto-join/reconnect features are enabled"
+            "• Voice state and channel info if voice auto-join/reconnect features are enabled, including command-triggered channel joining"
         ),
         inline=False,
     )
@@ -288,8 +289,16 @@ _VOICE_ERROR_CODES = {
     4015: "Server missed last heartbeat",
 }
 
-# Serialize voice join attempts to avoid overlapping connects
+# Serialize voice join attempts to avoid overlapping connects. Command joins,
+# startup joins, and reconnects all use this same lock.
 _voice_join_lock = asyncio.Lock()
+voice_channel_service = VoiceChannelService(
+    bot,
+    connect_timeout=Config.VOICE_CONNECT_TIMEOUT,
+    connection_lock=_voice_join_lock,
+)
+# PlaybackCommands calls this shared service before applying its existing room/ownership guards.
+bot.join_member_voice_channel = voice_channel_service.join_member_channel
 __last_connect_attempt_ts = 0.0
 
 async def _voice_connection_guard():
@@ -367,6 +376,19 @@ async def _resolve_voice_channel() -> discord.VoiceChannel | None:
     try:
         if not getattr(Config, 'ENABLE_VOICE_JOIN', False):
             return None
+        # Once a command selects a channel, keep reconnects focused on that target
+        # instead of pulling the bot back to the configured startup room.
+        active_channel = voice_channel_service.get_any_target_channel()
+        if active_channel is not None:
+            active_permissions = active_channel.permissions_for(active_channel.guild.me)
+            if not active_permissions.view_channel or not active_permissions.connect:
+                logger.warning(
+                    "Missing VIEW_CHANNEL or CONNECT permission in active voice channel '%s'",
+                    active_channel.name,
+                )
+                return None
+            return active_channel
+
         channel_id = getattr(Config, 'VOICE_JOIN_CHANNEL_ID', 0)
         if not isinstance(channel_id, int) or channel_id <= 0:
             logger.warning("Voice join enabled but VOICE_JOIN_CHANNEL_ID is not configured or invalid")
@@ -397,9 +419,15 @@ async def _resolve_voice_channel() -> discord.VoiceChannel | None:
         return None
 
 async def join_voice_channel() -> bool:
-    """Join the configured voice channel with retries and verification."""
-    if not getattr(Config, 'ENABLE_VOICE_JOIN', False) or not getattr(Config, 'VOICE_AUTO_JOIN_ON_START', True):
+    """Join the active command-selected channel or configured startup channel."""
+    if not getattr(Config, 'ENABLE_VOICE_JOIN', False):
         logger.info("Voice auto-join is disabled by configuration")
+        return False
+    if (
+        not getattr(Config, 'VOICE_AUTO_JOIN_ON_START', True)
+        and voice_channel_service.get_any_target_channel() is None
+    ):
+        logger.info("Voice auto-join on startup is disabled and no command-selected target exists")
         return False
 
     async with _voice_join_lock:
@@ -572,18 +600,17 @@ async def on_voice_state_update(member, before, after):
 
         logger.info(f"Bot was disconnected from voice. Attempting reconnect... (Attempt {_reconnect_attempts + 1}/{_MAX_RECONNECTS})")
 
-        # Clean up any existing client in this guild
-        try:
-            if before and before.channel:
-                existing = discord.utils.get(bot.voice_clients, guild=before.channel.guild)
-                if existing:
-                    await existing.disconnect(force=True)
-                    await asyncio.sleep(1)
-        except Exception:
-            pass
+        # The join helpers clean up stale clients while holding the shared voice lock.
 
-        # Try to rejoin the configured channel
-        joined = await join_voice_channel()
+        # Prefer the last command-selected channel; fall back to the configured startup channel.
+        target_channel = (
+            voice_channel_service.get_target_channel(before.channel.guild)
+            if before and before.channel else None
+        )
+        if target_channel is not None:
+            joined, _ = await voice_channel_service.join_channel(target_channel)
+        else:
+            joined = await join_voice_channel()
         if joined:
             _reconnect_attempts = 0
             _voice_debounce_until = time.time() + max(5.0, float(getattr(Config, 'VOICE_DEBOUNCE_SECONDS', 5.0)))

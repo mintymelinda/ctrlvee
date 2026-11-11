@@ -3,7 +3,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.config import parse_allowed_roles_value, parse_watch_folders_value
+from unittest.mock import patch
+
+from src.config import Config, parse_allowed_roles_value, parse_watch_folders_value
 
 
 class ConfigParsingTests(unittest.TestCase):
@@ -13,6 +15,17 @@ class ConfigParsingTests(unittest.TestCase):
         )
 
         self.assertEqual(roles, ["Theater Host", 123456789012345678])
+
+    def test_command_voice_auto_join_requires_voice_join_enabled(self):
+        with patch.object(Config, "ENABLE_VOICE_JOIN", False), patch.object(
+            Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
+        ):
+            errors = Config.validate()
+
+        self.assertIn(
+            "VOICE_AUTO_JOIN_ON_COMMAND requires ENABLE_VOICE_JOIN=true",
+            errors,
+        )
 
     def test_watch_folders_support_quoted_paths_containing_commas(self):
         with tempfile.TemporaryDirectory() as directory:

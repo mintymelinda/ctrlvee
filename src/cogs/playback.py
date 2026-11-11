@@ -142,19 +142,41 @@ class PlaybackCommands(commands.Cog):
 
     async def _playback_guard(self, member: discord.Member, presence_only: bool = False) -> tuple[bool, str]:
         """Enforce voice-room presence and prevent hijacking an active user's track."""
-        if not bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
-            return True, ""
-        room = self._resolve_room_channel(member.guild)
-        if room is None and int(getattr(Config, "VOICE_JOIN_CHANNEL_ID", 0) or 0) > 0:
-            return False, (
-                "Playback control is unavailable: the configured voice room can't be found. "
-                "Ask the bot owner to check `VOICE_JOIN_CHANNEL_ID`."
-            )
-
-        voice = getattr(member, "voice", None)
-        requester_in_room = bool(
-            voice and voice.channel and room is not None and voice.channel.id == room.id
+        auto_join_on_command = (
+            bool(getattr(Config, "ENABLE_VOICE_JOIN", False))
+            and bool(getattr(Config, "VOICE_AUTO_JOIN_ON_COMMAND", False))
         )
+        if auto_join_on_command:
+            voice = getattr(member, "voice", None)
+            requester_channel = getattr(voice, "channel", None)
+            if requester_channel is None:
+                return False, "Join a voice channel first, then try the playback command."
+
+            join_member_channel = getattr(self.bot, "join_member_voice_channel", None)
+            if not callable(join_member_channel):
+                return False, "Voice auto-join is unavailable right now. Please try again later."
+
+            joined, join_result = await join_member_channel(member)
+            if not joined:
+                return False, join_result
+            if not bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
+                return True, ""
+            room = requester_channel
+            requester_in_room = True
+        else:
+            if not bool(getattr(Config, "ENABLE_VOICE_ROOM_RULES", True)):
+                return True, ""
+            room = self._resolve_room_channel(member.guild)
+            if room is None and int(getattr(Config, "VOICE_JOIN_CHANNEL_ID", 0) or 0) > 0:
+                return False, (
+                    "Playback control is unavailable: the configured voice room can't be found. "
+                    "Ask the bot owner to check `VOICE_JOIN_CHANNEL_ID`."
+                )
+
+            voice = getattr(member, "voice", None)
+            requester_in_room = bool(
+                voice and voice.channel and room is not None and voice.channel.id == room.id
+            )
         current_id = None if presence_only else await self._current_stream_item_id()
         owner_id = None if presence_only else self._playback_owner_id
         owner = None
@@ -2198,6 +2220,12 @@ class PlaybackCommands(commands.Cog):
     @commands.has_any_role(*Config.ALLOWED_ROLES)
     async def pause(self, ctx):
         """Pause playback"""
+        if (
+            bool(getattr(Config, "ENABLE_VOICE_JOIN", False))
+            and bool(getattr(Config, "VOICE_AUTO_JOIN_ON_COMMAND", False))
+        ):
+            if not await self._check_room(ctx):
+                return
         if not await self._check_cooldown(ctx):
             return
 

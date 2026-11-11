@@ -26,6 +26,86 @@ from src.cogs.playback import (
 
 
 class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def test_pause_command_uses_requester_auto_join_guard_when_enabled(self):
+        vlc = SimpleNamespace(run_async=AsyncMock())
+        cog = PlaybackCommands(SimpleNamespace(), vlc, Mock(), Mock())
+        cog._check_room = AsyncMock(return_value=False)
+        ctx = SimpleNamespace()
+
+        with patch.object(Config, "ENABLE_VOICE_JOIN", True), patch.object(
+            Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
+        ):
+            await cog.pause.callback(cog, ctx)
+
+        cog._check_room.assert_awaited_once_with(ctx)
+        vlc.run_async.assert_not_awaited()
+
+    async def test_playback_guard_joins_requesters_voice_channel_when_enabled(self):
+        channel = SimpleNamespace(id=321)
+        join_member_voice_channel = AsyncMock(return_value=(True, "joined"))
+        bot = SimpleNamespace(join_member_voice_channel=join_member_voice_channel)
+        cog = PlaybackCommands(bot, Mock(), Mock(), Mock())
+        member = SimpleNamespace(
+            id=123,
+            guild=SimpleNamespace(get_member=Mock(return_value=None)),
+            voice=SimpleNamespace(channel=channel),
+        )
+
+        with patch.object(Config, "ENABLE_VOICE_JOIN", True), patch.object(
+            Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
+        ):
+            allowed, reason = await cog._playback_guard(member, presence_only=True)
+
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+        join_member_voice_channel.assert_awaited_once_with(member)
+
+    async def test_playback_guard_rejects_requester_outside_voice_when_auto_join_enabled(self):
+        join_member_voice_channel = AsyncMock()
+        cog = PlaybackCommands(
+            SimpleNamespace(join_member_voice_channel=join_member_voice_channel),
+            Mock(),
+            Mock(),
+            Mock(),
+        )
+        member = SimpleNamespace(
+            id=123,
+            guild=SimpleNamespace(get_member=Mock(return_value=None)),
+            voice=SimpleNamespace(channel=None),
+        )
+
+        with patch.object(Config, "ENABLE_VOICE_JOIN", True), patch.object(
+            Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
+        ):
+            allowed, reason = await cog._playback_guard(member, presence_only=True)
+
+        self.assertFalse(allowed)
+        self.assertIn("Join a voice channel", reason)
+        join_member_voice_channel.assert_not_awaited()
+
+    async def test_playback_guard_stops_when_voice_join_fails(self):
+        join_member_voice_channel = AsyncMock(return_value=(False, "Missing Connect permission"))
+        cog = PlaybackCommands(
+            SimpleNamespace(join_member_voice_channel=join_member_voice_channel),
+            Mock(),
+            Mock(),
+            Mock(),
+        )
+        member = SimpleNamespace(
+            id=123,
+            guild=SimpleNamespace(get_member=Mock(return_value=None)),
+            voice=SimpleNamespace(channel=SimpleNamespace(id=321)),
+        )
+
+        with patch.object(Config, "ENABLE_VOICE_JOIN", True), patch.object(
+            Config, "VOICE_AUTO_JOIN_ON_COMMAND", True
+        ):
+            allowed, reason = await cog._playback_guard(member, presence_only=True)
+
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "Missing Connect permission")
+        join_member_voice_channel.assert_awaited_once_with(member)
+
     def test_interaction_role_check_accepts_configured_role_name_or_id(self):
         member = SimpleNamespace(roles=[
             SimpleNamespace(id=42, name="DJ"),
