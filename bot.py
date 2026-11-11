@@ -374,6 +374,12 @@ async def _resolve_voice_channel() -> discord.VoiceChannel | None:
     try:
         if not getattr(Config, 'ENABLE_VOICE_JOIN', False):
             return None
+        # Once a command selects a channel, keep reconnects focused on that target
+        # instead of pulling the bot back to the configured startup room.
+        active_channel = voice_channel_service.get_any_target_channel()
+        if active_channel is not None:
+            return active_channel
+
         channel_id = getattr(Config, 'VOICE_JOIN_CHANNEL_ID', 0)
         if not isinstance(channel_id, int) or channel_id <= 0:
             logger.warning("Voice join enabled but VOICE_JOIN_CHANNEL_ID is not configured or invalid")
@@ -404,9 +410,15 @@ async def _resolve_voice_channel() -> discord.VoiceChannel | None:
         return None
 
 async def join_voice_channel() -> bool:
-    """Join the configured voice channel with retries and verification."""
-    if not getattr(Config, 'ENABLE_VOICE_JOIN', False) or not getattr(Config, 'VOICE_AUTO_JOIN_ON_START', True):
+    """Join the active command-selected channel or configured startup channel."""
+    if not getattr(Config, 'ENABLE_VOICE_JOIN', False):
         logger.info("Voice auto-join is disabled by configuration")
+        return False
+    if (
+        not getattr(Config, 'VOICE_AUTO_JOIN_ON_START', True)
+        and voice_channel_service.get_any_target_channel() is None
+    ):
+        logger.info("Voice auto-join on startup is disabled and no command-selected target exists")
         return False
 
     async with _voice_join_lock:
