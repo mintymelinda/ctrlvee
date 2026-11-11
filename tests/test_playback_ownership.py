@@ -62,6 +62,34 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
         view = PlaybackControlView(Mock())
         self.assertIn("Manage Queue", {button.label for button in view.children})
 
+    async def test_playback_panel_reuses_video_status_embed_and_adds_queue_overview(self):
+        embed = Mock()
+        embed.title = "Now Playing: Example Movie"
+        cog = SimpleNamespace(
+            get_status_embed=AsyncMock(return_value=embed),
+            vlc=SimpleNamespace(
+                run_async=AsyncMock(
+                    return_value=(
+                        {"queued_items": {}, "shuffle_currently_on": True},
+                        None,
+                    )
+                )
+            ),
+        )
+
+        result = await PlaybackCommands._playback_panel_embed(cog)
+
+        self.assertIs(result, embed)
+        cog.get_status_embed.assert_awaited_once_with()
+        cog.vlc.run_async.assert_awaited_once_with("get_queue_snapshot")
+        embed.add_field.assert_any_call(name="Shuffle", value="Enabled", inline=True)
+        embed.add_field.assert_any_call(
+            name="Soft Queue (0)",
+            value="No queued items",
+            inline=False,
+        )
+        embed.set_footer.assert_called_once()
+
     def test_queue_manager_exposes_clear_queue_confirmation_action(self):
         queue_status = {"queued_items": {"track": {"queue_order": 1, "item_name": "Track"}}}
         view = QueueManageView(
