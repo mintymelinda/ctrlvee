@@ -1682,7 +1682,26 @@ class VLCController:
             return {"success": False, "error": "Queued media has no persisted media URI"}
         remaining = len(self._queued_items)
         restore_shuffle = next_item.get("restore_shuffle", False)
-        playback_id = self.play_media_uri(media_uri, next_item.get("item_name", "Unknown"))
+
+        # Playlist-originated queue entries already have a live VLC execution
+        # item. Select that exact item instead of enqueueing a duplicate URI.
+        # NAS-originated entries have no VLC ID and are loaded only when played.
+        playback_id = None
+        if source_item_id is not None:
+            playlist = self.get_playlist()
+            source = next(
+                (
+                    leaf for leaf in playlist.findall(".//leaf")
+                    if str(leaf.get("id")) == str(source_item_id)
+                    and leaf.get("uri") == media_uri
+                ),
+                None,
+            ) if playlist is not None else None
+            if source is not None and self.play_item_by_id(source_item_id):
+                playback_id = str(source_item_id)
+
+        if playback_id is None:
+            playback_id = self.play_media_uri(media_uri, next_item.get("item_name", "Unknown"))
         if playback_id is None:
             return {"success": False, "error": f"Failed to play queued media URI for {next_item.get('item_name', 'Unknown')}"}
         if remaining == 1 and restore_shuffle and not self.get_shuffle_state():
