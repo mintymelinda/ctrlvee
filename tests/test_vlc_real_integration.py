@@ -403,6 +403,13 @@ class RealVLCIntegrationTests(unittest.TestCase):
             else None,
             "VLC playback to enter the playing state before stop",
         )
+        self.wait_for(
+            lambda: status
+            if (status := self.controller.get_status()) is not None
+            and int(status.findtext("time", "0")) >= 1
+            else None,
+            "VLC playback position to advance before stop",
+        )
         self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
 
         self.controller.stop()
