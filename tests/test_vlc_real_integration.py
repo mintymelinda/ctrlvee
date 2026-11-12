@@ -345,9 +345,23 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.assertTrue(restored["success"], restored)
         self.assertEqual(restored["queued_item_ids"], [first_queue_id, second_queue_id])
 
+        # VLC 3.0 can crash if its active playlist is emptied while an
+        # item is playing. Stop playback and wait for the server to report the
+        # stopped state before simulating loss of the execution playlist.
+        restarted.stop()
+        self.wait_for(
+            lambda: status
+            if (status := restarted.get_status()) is not None
+            and status.findtext("state") == "stopped"
+            else None,
+            "VLC playback to stop before simulating playlist loss",
+        )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
+
         # The bot queue must survive VLC losing every playlist ID. VLC is only
         # an execution target; queued URIs and order live in CtrlVee's backup.
         restarted.send_command("pl_empty")
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
         self.wait_for(
             lambda: playlist
             if (playlist := restarted.get_playlist()) is not None
