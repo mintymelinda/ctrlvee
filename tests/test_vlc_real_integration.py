@@ -289,6 +289,26 @@ class RealVLCIntegrationTests(unittest.TestCase):
                     "shuffle state to return to its original value",
                 )
 
+    def test_real_vlc_direct_media_queue_plays_file_without_playlist_preload(self):
+        self.clear_playlist()
+        media_path = self.media_paths[0]
+        media_uri = media_path.as_uri()
+
+        queued = self.controller.queue_media_batch([
+            {"media_uri": media_uri, "item_name": media_path.name},
+        ])
+        self.assertTrue(queued["success"], queued)
+        playlist = self.controller.get_playlist()
+        self.assertIsNotNone(playlist)
+        self.assertEqual(playlist.findall(".//leaf"), [])
+
+        played = self.controller.play_next_queued_item()
+        self.assertTrue(played["success"], played)
+        current_id = self.wait_for_current_uri(media_uri)
+        self.assertEqual(played["item_id"], current_id)
+        self.assertEqual(played["media_uri"], media_uri)
+        self.assertEqual(played["queue_id"], queued["queue_ids"][0])
+
     def test_real_vlc_soft_queue_orders_removes_and_plays_items(self):
         first_id, second_id, third_id = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
