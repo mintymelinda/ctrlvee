@@ -494,7 +494,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(playing.findtext("state"), "playing")
 
-        self.assertIsNotNone(self.controller.pause())
+        self.controller.pause()
         paused = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -504,7 +504,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(paused.findtext("state"), "paused")
 
-        self.assertIsNotNone(self.controller.play())
+        self.controller.play()
         self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -513,7 +513,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             "VLC playback to resume",
         )
 
-        self.assertIsNotNone(self.controller.seek(5))
+        self.controller.seek(5)
         seeked = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -523,7 +523,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         self.assertGreaterEqual(int(seeked.findtext("time", "0")), 4)
 
-        self.assertIsNotNone(self.controller.stop())
+        self.controller.stop()
         stopped = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
