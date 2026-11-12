@@ -30,7 +30,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
                 media.setnchannels(1)
                 media.setsampwidth(2)
                 media.setframerate(sample_rate)
-                media.writeframes(b"\\x00\\x00" * sample_rate * duration_seconds)
+                media.writeframes(b"\x00\x00" * sample_rate * duration_seconds)
             cls.media_paths.append(media_path)
         cls.media_path = cls.media_paths[0]
 
