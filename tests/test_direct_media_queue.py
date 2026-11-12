@@ -37,6 +37,43 @@ class DirectMediaQueueTests(unittest.TestCase):
         get_playlist.assert_not_called()
         save.assert_called_once_with()
 
+    def test_direct_queue_item_is_played_from_its_uri_without_playlist_lookup(self):
+        item = {"media_uri": "file:///nas/TV/Futurama/S03E01.mkv", "item_name": "S03E01.mkv"}
+        with patch.object(self.controller, "get_shuffle_state", return_value=False), patch.object(
+            self.controller, "_save_queue_backup"
+        ):
+            queued = self.controller.queue_media_batch([item])
+        self.assertTrue(queued["success"], queued)
+
+        with patch.object(self.controller, "play_media_uri", return_value="new-vlc-id") as play_uri, patch.object(
+            self.controller, "get_playlist"
+        ) as get_playlist, patch.object(self.controller, "_save_queue_backup"):
+            result = self.controller.play_next_queued_item()
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["media_uri"], item["media_uri"])
+        play_uri.assert_called_once_with(item["media_uri"], item["item_name"])
+        get_playlist.assert_not_called()
+        queued_entry = self.controller._queued_items[queued["queue_ids"][0]]
+        self.assertEqual(queued_entry["playlist_item_id"], "new-vlc-id")
+
+    def test_direct_media_queue_backup_survives_controller_restart(self):
+        item = {"media_uri": "file:///nas/Movies/Arrival.mkv", "item_name": "Arrival.mkv"}
+        with patch.object(self.controller, "get_shuffle_state", return_value=False):
+            result = self.controller.queue_media_batch([item])
+        self.assertTrue(result["success"], result)
+
+        restored = VLCController(
+            host="127.0.0.1",
+            port=8080,
+            password="test-password",
+            queue_backup_file=str(Path(self.temp_dir.name) / "queue.json"),
+        )
+        entry = restored._queued_items[result["queue_ids"][0]]
+        self.assertEqual(entry["media_uri"], item["media_uri"])
+        self.assertEqual(entry["item_name"], item["item_name"])
+        self.assertIsNone(entry["playlist_item_id"])
+
     def test_bulk_queue_validates_every_item_before_mutating(self):
         before = dict(self.controller._queued_items)
         result = self.controller.queue_media_batch([
