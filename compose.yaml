@@ -19,6 +19,7 @@ services:
       PLAYLIST_AUTOSAVE_FILE: /app/data/ctrlvee_playlist.xspf
       PLAYBACK_PANEL_REGISTRY_PATH: /app/data/playback_panels.json
       WATCH_STATS_FILE: /app/data/watch_stats.json
+      MEDIA_LIBRARY_DB_PATH: /app/data/media_library.sqlite3
     user: "${PUID:-1000}:${PGID:-1000}"
     read_only: true
     tmpfs:
@@ -29,7 +30,9 @@ services:
       - ALL
     volumes:
       - ./data:/app/data
-      # Optional: mount media folders at the SAME absolute paths used by VLC.
-      # This is needed for watch-folder scanning and schedule file-existence checks.
-      # - /path/on/plexserver/Movies:/path/on/plexserver/Movies:ro
-      # - /path/on/plexserver/TV:/path/on/plexserver/TV:ro
+      # Mount NAS media roots at the SAME absolute paths used by VLC.
+      # Set MEDIA_LIBRARY_ROOTS to the same in-container path VLC uses.
+      # The library index is persisted in ./data; media mounts can be read-only.
+      # Example: VLC uses /volume1/media, so mount and index that exact path:
+      # - /volume1/media:/volume1/media:ro
+      # Optional separate, smaller roots for new-file watch-folder automation.

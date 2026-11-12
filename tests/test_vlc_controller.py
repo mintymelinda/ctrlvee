@@ -291,6 +291,36 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["error"], "item_not_found")
         queue.assert_not_called()
 
+    def test_play_next_reuses_live_source_playlist_item_instead_of_enqueuing_duplicate(self):
+        self.controller._queued_items = {
+            "queue-a": {
+                "queue_id": "queue-a",
+                "playlist_item_id": "vlc-5",
+                "item_id": "vlc-5",
+                "source_playlist_item_id": "vlc-5",
+                "media_uri": "file:///media/episode.mkv",
+                "item_name": "Episode",
+                "queue_order": 1,
+                "restore_shuffle": False,
+            }
+        }
+        playlist = ET.fromstring(
+            '<playlist><leaf id="vlc-5" uri="file:///media/episode.mkv" name="Episode"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "play_item_by_id", return_value=True
+        ) as play_item, patch.object(self.controller, "play_media_uri") as enqueue, patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ), patch.object(self.controller, "_save_queue_backup"):
+            result = self.controller.play_next_queued_item()
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["item_id"], "vlc-5")
+        self.assertEqual(result["source_item_id"], "vlc-5")
+        play_item.assert_called_once_with("vlc-5")
+        enqueue.assert_not_called()
+        self.assertEqual(self.controller._queued_items["queue-a"]["playlist_item_id"], "vlc-5")
+
     def test_play_next_or_advance_prefers_queued_item(self):
         queued = {"success": True, "item_name": "Queued"}
         with patch.object(self.controller, "get_next_queued_item", return_value={"item_id": "1"}), patch.object(

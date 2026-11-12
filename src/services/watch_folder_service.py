@@ -7,6 +7,7 @@ from typing import Iterable, Set, Optional, List, Callable
 
 from ..config import Config, get_watch_folders_from_env, path_is_under
 from ..utils.media_utils import MediaUtils
+from .media_library_service import MediaLibraryService
 
 
 MEDIA_EXTENSIONS = {
@@ -26,6 +27,14 @@ def _episode_sort_key(path: str) -> tuple:
 class WatchFolderService:
     def __init__(self, vlc_controller, folders: Optional[List[str]] = None, scan_interval: Optional[int] = None):
         self.vlc = vlc_controller
+        self.media_library = (
+            MediaLibraryService(
+                Config.MEDIA_LIBRARY_ROOTS,
+                Config.MEDIA_LIBRARY_DB_PATH,
+                Config.MEDIA_LIBRARY_RESCAN_INTERVAL,
+            )
+            if Config.MEDIA_LIBRARY_ROOTS else None
+        )
         base_folders = folders if folders is not None else Config.WATCH_FOLDERS
         # Normalize initial folders to avoid duplicates from trailing slashes, etc.
         self.folders = [os.path.normpath(os.path.abspath(p)) for p in base_folders if p]
@@ -56,21 +65,21 @@ class WatchFolderService:
 
     def _update_media_size_cache(self):
         """Compute and cache total size of media files across all watch folders."""
-        all_files: List[str] = []
+        total_files = 0
+        total = 0
         for folder in self.folders:
             if not os.path.isdir(folder):
                 continue
-            all_files.extend(list(self._iter_media_files(folder)))
-        total_files = len(all_files)
-        total = 0
-        for idx, path in enumerate(all_files, 1):
-            try:
-                total += os.path.getsize(path)
-            except Exception:
-                continue
-            if idx == 1 or idx % 200 == 0 or idx == total_files:
-                self.logger.info(f"Calculating media size: {idx}/{total_files} files processed...")
+            for path in self._iter_media_files(folder):
+                total_files += 1
+                try:
+                    total += os.path.getsize(path)
+                except OSError:
+                    continue
+                if total_files == 1 or total_files % 200 == 0:
+                    self.logger.info("Calculating media size: %s files processed...", total_files)
         self._cached_media_size = total
+        self.logger.info("Media size calculation complete: %s files processed", total_files)
 
     def set_notifier(self, notifier: Callable[[List[str], bool], None]):
         """Set a callback that will be called with a list of successfully enqueued file paths.
@@ -81,12 +90,15 @@ class WatchFolderService:
         self._notifier = notifier
 
     def start(self):
+        library_started = self.media_library.start() if self.media_library else False
         if not self.folders:
             self.logger.info("WatchFolderService disabled (no WATCH_FOLDERS configured)")
-            return False
+            return library_started
         if self._thread and self._thread.is_alive():
             return True
         self.logger.info(f"Starting WatchFolderService for {len(self.folders)} folder(s) with interval {self.scan_interval}s")
+        if not library_started:
+            self.logger.info("Media library indexing is disabled (no MEDIA_LIBRARY_ROOTS configured)")
         for f in self.folders:
             self.logger.info(f" - Watching: {f}")
         self._stop_event.clear()
@@ -101,6 +113,8 @@ class WatchFolderService:
         self._stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
+        if self.media_library:
+            self.media_library.stop(timeout=timeout)
 
     def _run_loop(self):
         # Initial scan
