@@ -862,25 +862,60 @@ class VLCController:
         return False
     
     def play_media_uri(self, media_uri: str, item_name: str = "Queued media"):
-        """Replace VLC's execution playlist with one bot-selected media URI."""
+        """Append a bot-selected URI to VLC's execution playlist and play that entry."""
         import time
         if not isinstance(media_uri, str) or not media_uri.strip():
             self.logger.warning("Cannot play queued media without a valid URI")
             return None
-        # VLC's supported in_play operation appends and starts this URI. The
-        # bot queue remains authoritative; we never delete or reorder playlist
-        # entries using the unsupported pl_delete command.
-        response = self.send_command("in_play", {"input": media_uri, "name": item_name})
+
+        # Separate enqueue from selection. in_play combines both operations and
+        # can fail to select a URI that is already present in VLC's playlist.
+        # Capture existing IDs so repeated media still gets its own execution
+        # entry and queue identity remains independent of VLC's playlist IDs.
+        playlist = self.get_playlist()
+        if playlist is None:
+            self.logger.warning("Cannot enqueue queued media: VLC playlist is unavailable")
+            return None
+        existing_ids = {
+            str(item.get("id"))
+            for item in playlist.findall(".//leaf")
+            if item.get("id") is not None
+        }
+        response = self.send_command("in_enqueue", {"input": media_uri, "name": item_name})
         deadline = time.monotonic() + 5
+        execution_item_id = None
         while time.monotonic() < deadline:
-            playlist = self.get_playlist()
-            if playlist is not None:
-                current, _ = self._current_playlist_item(playlist)
-                if current is not None and str(current.get("uri")) == media_uri:
-                    return str(current.get("id"))
+            updated_playlist = self.get_playlist()
+            if updated_playlist is not None:
+                execution_item = next(
+                    (
+                        item for item in updated_playlist.findall(".//leaf")
+                        if item.get("uri") == media_uri
+                        and item.get("id") is not None
+                        and str(item.get("id")) not in existing_ids
+                    ),
+                    None,
+                )
+                if execution_item is not None:
+                    execution_item_id = str(execution_item.get("id"))
+                    break
             time.sleep(0.1)
-        self.logger.warning("VLC did not select queued media URI %s (response=%s)", media_uri, response is not None)
-        return None
+
+        if execution_item_id is None:
+            self.logger.warning(
+                "VLC did not enqueue queued media URI %s (response=%s)",
+                media_uri,
+                response is not None,
+            )
+            return None
+        if not self.play_item_by_id(execution_item_id):
+            self.logger.warning(
+                "VLC enqueued queued media URI %s as item %s but did not select it",
+                media_uri,
+                execution_item_id,
+            )
+            return None
+        return execution_item_id
 
     def play_item_by_id(self, item_id):
         """Play a specific playlist item and verify VLC selected it.
