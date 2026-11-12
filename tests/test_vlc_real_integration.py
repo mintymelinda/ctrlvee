@@ -394,6 +394,15 @@ class RealVLCIntegrationTests(unittest.TestCase):
         first_id, second_id, _ = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
         self.wait_for_current_item(first_id)
+        self.wait_for(
+            lambda: status
+            if (status := self.controller.get_status()) is not None
+            and status.findtext("state") == "playing"
+            else None,
+            "VLC playback to enter the playing state before stop",
+        )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
+
         self.controller.stop()
         self.wait_for(
             lambda: status
@@ -402,6 +411,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             else None,
             "VLC to stop before recovery",
         )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
 
         recovery = self.controller.play_item_and_capture(second_id)
         self.assertTrue(recovery["success"], recovery)
