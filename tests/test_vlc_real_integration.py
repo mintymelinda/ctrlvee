@@ -380,7 +380,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             host="127.0.0.1",
             port=self.port,
             password=self.password,
-            queue_backup_file=str(self.temp_path / "queue.json"),
+            queue_backup_file=str(self.queue_backup_file),
         )
         final_result = final_controller.reconcile_queue_with_playlist()
         self.assertTrue(final_result["success"], final_result)
