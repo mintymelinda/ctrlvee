@@ -20,9 +20,14 @@ from ..utils.media_utils import MediaUtils
 MEDIA_EXTENSIONS = frozenset({
     ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".wmv", ".flv",
     ".mpg", ".mpeg", ".ts", ".m2ts", ".webm",
-    ".mp3", ".flac", ".aac", ".wav", ".ogg", ".m4a",
+    ".mp3", ".flac", ".aac", ".wav", ".ogg", ".m4a", ".opus", ".wma",
+    ".aiff", ".aif", ".ape", ".alac", ".ac3", ".dts", ".mka",
+    ".ogv", ".3gp", ".3g2", ".vob", ".asf", ".divx", ".mxf", ".m2v",
 })
-AUDIO_EXTENSIONS = frozenset({".mp3", ".flac", ".aac", ".wav", ".ogg", ".m4a"})
+AUDIO_EXTENSIONS = frozenset({
+    ".mp3", ".flac", ".aac", ".wav", ".ogg", ".m4a", ".opus", ".wma",
+    ".aiff", ".aif", ".ape", ".alac", ".ac3", ".dts", ".mka",
+})
 _GENERIC_DIRS = frozenset({
     "media", "movies", "movie", "tv", "television", "shows", "series",
     "video", "videos", "library", "downloads",
@@ -156,7 +161,11 @@ class MediaLibraryService:
                         INSERT INTO media_files_fts(media_files_fts, rowid, name, path, series_title)
                         VALUES ('delete', old.rowid, old.name, old.path, coalesce(old.series_title, ''));
                     END;
-                    CREATE TRIGGER IF NOT EXISTS media_files_au AFTER UPDATE ON media_files BEGIN
+                    CREATE TRIGGER IF NOT EXISTS media_files_au AFTER UPDATE ON media_files
+                    WHEN old.name IS NOT new.name
+                      OR old.path IS NOT new.path
+                      OR old.series_title IS NOT new.series_title
+                    BEGIN
                         INSERT INTO media_files_fts(media_files_fts, rowid, name, path, series_title)
                         VALUES ('delete', old.rowid, old.name, old.path, coalesce(old.series_title, ''));
                         INSERT INTO media_files_fts(rowid, name, path, series_title)
@@ -253,10 +262,16 @@ class MediaLibraryService:
                 with self._database() as db:
                     db.execute("BEGIN IMMEDIATE")
                     for root in roots:
+                        if self._stop_event.is_set():
+                            errors.append("Media library scan cancelled")
+                            break
                         if not os.path.isdir(root):
                             errors.append(f"Media root is unavailable: {root}")
                             continue
                         for path in self._iter_files(root, errors):
+                            if self._stop_event.is_set():
+                                errors.append("Media library scan cancelled")
+                                break
                             try:
                                 stat = os.stat(path)
                             except OSError as error:
@@ -292,6 +307,8 @@ class MediaLibraryService:
                             if indexed % 1000 == 0:
                                 db.commit()
                                 db.execute("BEGIN IMMEDIATE")
+                        if self._stop_event.is_set():
+                            break
                     complete = not errors
                     if complete:
                         for root in roots:
