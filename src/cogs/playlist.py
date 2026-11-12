@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 import logging
 import re
+from pathlib import Path
 from ..utils.media_utils import MediaUtils
 from ..config import Config
 from ..utils.command_utils import format_cmd_inline
@@ -369,6 +370,135 @@ class PlaylistCommands(commands.Cog):
         self.vlc = vlc_controller
         self.tmdb = tmdb_service
         self.watch_service = watch_service
+
+    def _media_library(self):
+        return getattr(self.watch_service, "media_library", None)
+
+    async def _queue_library_paths(self, paths: List[str]) -> dict:
+        library = self._media_library()
+        if library is None or any(not library.is_available(path) for path in paths):
+            return {"success": False, "error": "one_or_more_media_files_are_missing_or_outside_the_library"}
+        entries = [
+            {"media_uri": Path(path).resolve().as_uri(), "item_name": Path(path).name}
+            for path in paths
+        ]
+        return await self.vlc.run_async("queue_media_batch", entries)
+
+    @commands.command(name="media_search")
+    @commands.has_any_role(*Config.ALLOWED_ROLES)
+    async def media_search(self, ctx: commands.Context, *, query: str):
+        """Search all indexed media files on the configured NAS mounts."""
+        library = self._media_library()
+        if library is None or not library.roots:
+            await ctx.send("The media library is not configured. Set MEDIA_LIBRARY_ROOTS to the mounted media paths.")
+            return
+        status = library.status()
+        if status["indexing"] and status["indexed"] == 0:
+            await ctx.send("The media library is still building its initial index. Try again when indexing finishes.")
+            return
+        results = await asyncio.to_thread(library.search, query, 20)
+        if not results:
+            suffix = " The initial index may still be running." if status["indexing"] else ""
+            await ctx.send(f"No indexed media matched **{query}**.{suffix}")
+            return
+        lines = []
+        for index, item in enumerate(results, start=1):
+            kind = "Episode" if item["media_type"] == "episode" else "Audio" if item["media_type"] == "audio" else "Video"
+            lines.append(f"{index}. **{kind}** — {item['name']}\n<{item['path']}>")
+        embed = discord.Embed(
+            title=f"Media Library Search: {query}",
+            description="\n\n".join(lines)[:4000],
+            color=discord.Color.blurple(),
+        )
+        footer = f"Showing up to {len(results)} matches from the NAS index. Use queue_media with a unique title or full path."
+        if status["indexing"]:
+            footer += " Initial indexing is still running; results may be incomplete."
+        embed.set_footer(text=footer)
+        await ctx.send(embed=embed)
+
+    @commands.command(name="queue_media")
+    @commands.has_any_role(*Config.ALLOWED_ROLES)
+    async def queue_media(self, ctx: commands.Context, *, query: str):
+        """Queue one uniquely matched file from the indexed NAS media library."""
+        library = self._media_library()
+        if library is None or not library.roots:
+            await ctx.send("The media library is not configured. Set MEDIA_LIBRARY_ROOTS to the mounted media paths.")
+            return
+        results = await asyncio.to_thread(library.search, query, 100)
+        exact = [
+            item for item in results
+            if item["path"].casefold() == query.casefold()
+            or item["name"].casefold() == query.casefold()
+        ]
+        selected = exact if exact else results
+        if len(selected) != 1:
+            if not selected:
+                await ctx.send(f"No indexed media matched **{query}**.")
+            else:
+                examples = "\n".join(f"• {item['path']}" for item in selected[:8])
+                await ctx.send(
+                    f"That search is ambiguous ({len(selected)} matches). Refine it or use the full path:\n{examples}"
+                )
+            return
+        item = selected[0]
+        result = await self._queue_library_paths([item["path"]])
+        if not result.get("success"):
+            await ctx.send(f"Could not queue that media file: {result.get('error', 'unknown error')}")
+            return
+        await ctx.send(f"Added **{item['name']}** to the queue at position {result['total_queued']}.")
+
+    @commands.command(name="queue_season")
+    @commands.has_any_role(*Config.ALLOWED_ROLES)
+    async def queue_season(self, ctx: commands.Context, season: int, *, series: str):
+        """Queue all uniquely identified episodes in a season, in episode order."""
+        if season < 0:
+            await ctx.send("Season number must be zero or greater.")
+            return
+        library = self._media_library()
+        if library is None or not library.roots:
+            await ctx.send("The media library is not configured. Set MEDIA_LIBRARY_ROOTS to the mounted media paths.")
+            return
+        episodes = await asyncio.to_thread(library.find_season, series, season, 2000)
+        if not episodes:
+            await ctx.send(f"No indexed episodes found for **{series}**, season {season}.")
+            return
+        if len(episodes) >= 2000:
+            await ctx.send("This season returned the library safety limit of 2,000 files. Narrow the series search before queueing.")
+            return
+
+        episode_versions = {}
+        for item in episodes:
+            episode_versions.setdefault(item["episode"], []).append(item)
+        duplicates = {
+            number: items for number, items in episode_versions.items()
+            if len(items) > 1
+        }
+        if duplicates:
+            details = []
+            for number, items in sorted(duplicates.items()):
+                details.append(f"E{number:02d}: " + " | ".join(item["name"] for item in items[:3]))
+            await ctx.send(
+                "Multiple files exist for the same episode number, so I did not queue an ambiguous season. "
+                "Choose preferred versions with queue_media and the full path:\n"
+                + "\n".join(details[:8])
+            )
+            return
+
+        paths = [item["path"] for item in episodes]
+        result = await self._queue_library_paths(paths)
+        if not result.get("success"):
+            await ctx.send(f"Could not queue the season: {result.get('error', 'unknown error')}")
+            return
+        preview = "\n".join(
+            f"{item['episode']:02d}. {item['name']}" for item in episodes[:10]
+        )
+        if len(episodes) > 10:
+            preview += f"\n… and {len(episodes) - 10} more"
+        await ctx.send(
+            f"Queued **{len(episodes)} episodes** of **{series} — Season {season}** "
+            f"in episode order (queue positions {result['total_queued'] - len(episodes) + 1}–{result['total_queued']}).\n"
+            + preview
+        )
 
     async def _play_and_confirm_item(self, item_id: str, member=None) -> dict:
         """Play a live playlist item and confirm it is current before publishing ownership."""

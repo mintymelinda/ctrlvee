@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import requests
 import logging
 import uuid
+from urllib.parse import urlparse
 
 class VLCError(Exception):
     """Base exception for VLC controller errors"""
@@ -1394,6 +1395,80 @@ class VLCController:
     def _queue_info_for_playlist_item_id(self, playlist_item_id):
         queue_id = self._queue_id_for_playlist_item_id(playlist_item_id)
         return (queue_id, self._queued_items.get(queue_id)) if queue_id else (None, None)
+
+    def queue_media_batch(self, media_items):
+        """Atomically append local media references without touching VLC's playlist."""
+        if not isinstance(media_items, (list, tuple)) or not media_items:
+            return {"success": False, "error": "empty_media_batch"}
+
+        validated = []
+        for item in media_items:
+            if not isinstance(item, dict):
+                return {"success": False, "error": "invalid_media_entry"}
+            media_uri = str(item.get("media_uri") or "").strip()
+            if urlparse(media_uri).scheme != "file":
+                return {"success": False, "error": "media_uri_must_be_local_file"}
+            item_name = str(item.get("item_name") or "").strip()
+            if not item_name:
+                return {"success": False, "error": "media_name_required"}
+            validated.append((media_uri, item_name))
+
+        try:
+            original_items = {key: dict(value) for key, value in self._queued_items.items()}
+            original_restore_queue = list(self._shuffle_restore_queue)
+            shuffle_was_on = bool(self.get_shuffle_state())
+            had_restore_marker = any(
+                info.get("restore_shuffle", False)
+                for info in self._queued_items.values()
+            )
+            shuffle_toggled = False
+            if shuffle_was_on:
+                self.toggle_shuffle()
+                shuffle_toggled = True
+
+            self._compact_queue_order()
+            new_queue_ids = []
+            for media_uri, item_name in validated:
+                queue_id = str(uuid.uuid4())
+                self._queued_items[queue_id] = {
+                    "queue_id": queue_id,
+                    "playlist_item_id": None,
+                    "item_id": None,
+                    "source_playlist_item_id": None,
+                    "media_uri": media_uri,
+                    "item_name": item_name,
+                    "queue_order": len(self._queued_items) + 1,
+                    "shuffle_was_on": shuffle_was_on,
+                    "restore_shuffle": False,
+                    "queued_at_time": __import__("time").time(),
+                    "queue_type": "soft",
+                }
+                new_queue_ids.append(queue_id)
+
+            if shuffle_was_on or had_restore_marker:
+                for info in self._queued_items.values():
+                    info["restore_shuffle"] = False
+                final_queue_id = new_queue_ids[-1]
+                self._queued_items[final_queue_id]["restore_shuffle"] = True
+                self._shuffle_restore_queue = [final_queue_id]
+
+            self._save_queue_backup()
+            return {
+                "success": True,
+                "added": len(new_queue_ids),
+                "queue_ids": new_queue_ids,
+                "total_queued": len(self._queued_items),
+            }
+        except Exception as error:
+            self._queued_items = original_items if "original_items" in locals() else self._queued_items
+            self._shuffle_restore_queue = original_restore_queue if "original_restore_queue" in locals() else self._shuffle_restore_queue
+            if "shuffle_toggled" in locals() and shuffle_toggled:
+                try:
+                    self.toggle_shuffle()
+                except Exception:
+                    self.logger.exception("Could not restore shuffle after failed media batch")
+            self.logger.exception("Error adding filesystem media batch to queue")
+            return {"success": False, "error": str(error)}
 
     def queue_item_next(self, item_id, restore_shuffle=True):
         """Add a VLC media reference as a new, independently identified queue entry."""

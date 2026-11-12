@@ -245,6 +245,11 @@ class Config:
     # Minimum seconds between channel rename attempts.
     VOICE_STATUS_UPDATE_THROTTLE: int = int(os.getenv('VOICE_STATUS_UPDATE_THROTTLE', '15'))
 
+    # Media-library roots are indexed for search and direct queueing, separately from watch folders.
+    MEDIA_LIBRARY_ROOTS = parse_watch_folders_value(os.getenv('MEDIA_LIBRARY_ROOTS', ''))
+    MEDIA_LIBRARY_DB_PATH: str = os.getenv('MEDIA_LIBRARY_DB_PATH', 'data/media_library.sqlite3').strip()
+    MEDIA_LIBRARY_RESCAN_INTERVAL: int = int(os.getenv('MEDIA_LIBRARY_RESCAN_INTERVAL', '21600'))
+
     # Watch Folders
     # WATCH_FOLDERS supports commas/semicolons; quote paths with commas using double quotes.
     # Or set WATCH_FOLDERS_FILE to a file with one path per line.
@@ -255,7 +260,7 @@ class Config:
     # Minimum age (seconds) a file must remain unchanged before it is considered stable
     WATCH_STABLE_AGE: float = float(os.getenv('WATCH_STABLE_AGE', '2'))
     # Whether to enqueue discovered files on the initial scan (default: true)
-    WATCH_ENQUEUE_ON_START: bool = os.getenv('WATCH_ENQUEUE_ON_START', 'true').strip().lower() in {'1','true','yes','y'}
+    WATCH_ENQUEUE_ON_START: bool = os.getenv('WATCH_ENQUEUE_ON_START', 'false').strip().lower() in {'1','true','yes','y'}
     # Always load announce channel IDs from the environment at runtime
     @staticmethod
     def get_announce_channel_ids() -> list[int]:
@@ -304,6 +309,15 @@ class Config:
                     errors.append("PLAYLIST_AUTOSAVE_INTERVAL should be at least 10 seconds if autosave is enabled")
             except ValueError:
                 errors.append("PLAYLIST_AUTOSAVE_INTERVAL must be a valid integer (seconds)")
+
+        # Validate media-library roots independently from optional watch folders.
+        for folder in cls.MEDIA_LIBRARY_ROOTS:
+            if not os.path.isabs(folder):
+                errors.append(f"MEDIA_LIBRARY_ROOTS entry must be an absolute path: {folder}")
+            elif not os.path.isdir(folder):
+                errors.append(f"MEDIA_LIBRARY_ROOTS entry is not a directory or not found: {folder}")
+        if cls.MEDIA_LIBRARY_RESCAN_INTERVAL < 60:
+            errors.append("MEDIA_LIBRARY_RESCAN_INTERVAL must be at least 60 seconds")
 
         # Validate watch folders if provided
         if cls.WATCH_FOLDERS_FILE and not os.path.isfile(cls.WATCH_FOLDERS_FILE):

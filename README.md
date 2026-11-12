@@ -10,7 +10,8 @@ Current app version: `1.9.18`.
 - Lets users browse/search the active VLC playlist with paginated embeds
 - Supports a soft queue system that works with VLC shuffle behavior
 - Schedules playlist items using Philippines time (`Asia/Manila`)
-- Watches folders for new media and enqueues files automatically
+- Builds a persistent SQLite/FTS index of media across configured NAS mounts and searches it without rescanning the volume for each Discord query
+- Queues individual files and complete TV seasons directly from mounted media paths; the VLC playlist is not required
 - Enriches now-playing/status messages with TMDB movie/TV metadata
 - Optionally shows recent downloads from one or more Radarr instances
 - Optionally auto-joins a configured voice channel on startup, or follows playback-command users into their current voice channel
@@ -52,7 +53,9 @@ The Compose deployment stores queue backups, scheduled items, playlist autosaves
 
 Normal playback control works with media already loaded in the remote VLC playlist; the bot does not need to mount the video library just to send Play/Pause/Next commands.
 
-For watch-folder scanning and schedule file-existence checks, however, CtrlVee must be able to see the media files. Mount the relevant Plex-server media folders into the container **at the same absolute paths VLC uses**, preferably read-only, then set `WATCH_FOLDERS` to those container paths in `.env`. The Compose file includes commented examples to adapt. If you do not use watch folders or scheduling, these media mounts are unnecessary.
+For NAS library search and direct queueing, mount the media folders into the container **at the same absolute paths VLC uses**, preferably read-only, then set `MEDIA_LIBRARY_ROOTS` to those container paths. The library is indexed into a persistent SQLite database in `./data`; Discord searches query that index rather than walking the volume. The initial scan runs in the background, and a periodic reconciliation refreshes the index. Keep the database on persistent storage so the full volume does not need to be re-indexed after every restart.
+
+`WATCH_FOLDERS` is a separate, optional feature for monitoring a smaller set of folders for newly added files. Do not point it at the entire media library just to enable search; use `MEDIA_LIBRARY_ROOTS` for the library catalogue. Watch-folder startup no longer adds every existing file to VLC's playlist by default.
 
 ### Docker files
 
@@ -135,11 +138,14 @@ Edit `.env` (starting from `template.env`).
 
 ### Watch Folders
 
-- `WATCH_FOLDERS`: comma/semicolon-separated absolute paths
+- `MEDIA_LIBRARY_ROOTS`: comma/semicolon-separated absolute NAS mount paths to index for search and direct queueing
+- `MEDIA_LIBRARY_DB_PATH` (default `data/media_library.sqlite3`)
+- `MEDIA_LIBRARY_RESCAN_INTERVAL` (default `21600` seconds / 6 hours)
+- `WATCH_FOLDERS`: optional comma/semicolon-separated absolute paths for new-file monitoring
 - `WATCH_FOLDERS_FILE`: optional file containing one path per line (takes precedence over `WATCH_FOLDERS`)
 - `WATCH_SCAN_INTERVAL` (default `10`)
 - `WATCH_STABLE_AGE` (default `2`)
-- `WATCH_ENQUEUE_ON_START` (default `true`)
+- `WATCH_ENQUEUE_ON_START` (default `false`; prevents existing watch-folder contents from being bulk-loaded into VLC at startup)
 - `WATCH_ANNOUNCE_CHANNEL_ID`: comma-separated channel IDs
 - `WATCH_ANNOUNCE_ROLE_ID`: optional role mention ID for schedule announcements
 - `WATCH_ANNOUNCE_MAX_ITEMS`
@@ -214,6 +220,9 @@ Prefix shown as `!` below; replace with your configured `DISCORD_COMMAND_PREFIX`
 - `!play`, `!pause`, `!stop`, `!restart`
 - `!next`, `!previous`
 - `!rewind [seconds]`, `!forward [seconds]`
+- `!media_search <query>` — search the indexed NAS media library (not just the active VLC playlist)
+- `!queue_media <unique title or full path>` — queue one uniquely matched local media file directly
+- `!queue_season <season number> <series name>` — queue all uniquely identified episodes in that season in episode order
 - `!play_num <number>`
 - `!shuffle`, `!shuffle_on`, `!shuffle_off`
 - `!speed <rate|preset>`
