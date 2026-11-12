@@ -1294,3 +1294,194 @@ class PlaybackOwnershipTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlaybackPanelDispatchTests(unittest.IsolatedAsyncioTestCase):
+    def make_interaction(self, message=None):
+        return SimpleNamespace(
+            user=SimpleNamespace(id=7),
+            guild=SimpleNamespace(id=8),
+            channel=SimpleNamespace(id=9),
+            message=message,
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
+
+    async def test_dispatch_invokes_command_callback_with_interaction_context(self):
+        observed = {}
+        cog = SimpleNamespace(logger=Mock(), _playback_panel_embed=AsyncMock())
+        async def callback(received_cog, ctx, *args):
+            observed["cog"] = received_cog
+            observed["ctx"] = ctx
+            observed["args"] = args
+            await ctx.send("private result", ephemeral=False)
+
+        cog.seek = SimpleNamespace(callback=AsyncMock(side_effect=callback))
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction()
+
+        await view._dispatch(interaction, "seek", 30, "forward", refresh_panel=False)
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        self.assertIs(observed["cog"], cog)
+        self.assertEqual(observed["args"], (30, "forward"))
+        ctx = observed["ctx"]
+        self.assertIs(ctx.author, interaction.user)
+        self.assertIs(ctx.guild, interaction.guild)
+        self.assertIs(ctx.channel, interaction.channel)
+        self.assertIs(ctx.message, interaction.message)
+        interaction.followup.send.assert_awaited_once_with(
+            content="private result",
+            embed=None,
+            ephemeral=True,
+        )
+        cog.seek.callback.assert_awaited_once()
+
+    async def test_dispatch_refreshes_panel_after_successful_command(self):
+        message = SimpleNamespace(edit=AsyncMock())
+        cog = SimpleNamespace(
+            logger=Mock(),
+            play=SimpleNamespace(callback=AsyncMock()),
+            _playback_panel_embed=AsyncMock(return_value=discord.Embed(title="Updated")),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction(message)
+
+        await view._dispatch(interaction, "play")
+
+        cog.play.callback.assert_awaited_once()
+        cog._playback_panel_embed.assert_awaited_once_with()
+        message.edit.assert_awaited_once()
+        self.assertEqual(message.edit.await_args.kwargs["embed"].title, "Updated")
+        self.assertIs(message.edit.await_args.kwargs["view"], view)
+
+    async def test_dispatch_reports_command_failure_without_refreshing_panel(self):
+        message = SimpleNamespace(edit=AsyncMock())
+        cog = SimpleNamespace(
+            logger=Mock(),
+            stop=SimpleNamespace(callback=AsyncMock(side_effect=RuntimeError("VLC failed"))),
+            _playback_panel_embed=AsyncMock(),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction(message)
+
+        await view._dispatch(interaction, "stop")
+
+        interaction.followup.send.assert_awaited_once_with(
+            "That playback action failed. Check the bot logs for details.",
+            ephemeral=True,
+        )
+        cog.logger.exception.assert_called_once()
+        cog._playback_panel_embed.assert_not_awaited()
+        message.edit.assert_not_awaited()
+
+    async def test_dispatch_keeps_command_result_when_panel_refresh_fails(self):
+        message = SimpleNamespace(edit=AsyncMock(side_effect=discord.HTTPException(
+            SimpleNamespace(status=503, reason="unavailable"),
+            "temporary failure",
+        )))
+        cog = SimpleNamespace(
+            logger=Mock(),
+            pause=SimpleNamespace(callback=AsyncMock()),
+            _playback_panel_embed=AsyncMock(return_value=discord.Embed(title="Updated")),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction(message)
+
+        await view._dispatch(interaction, "pause")
+
+        cog.pause.callback.assert_awaited_once()
+        message.edit.assert_awaited_once()
+        cog.logger.debug.assert_called_once()
+        interaction.followup.send.assert_not_awaited()
+
+    async def test_advanced_options_loads_only_vlc_reported_tracks(self):
+        audio = [{"index": 1, "name": "Stereo"}]
+        subtitles = [{"index": 3, "name": "English"}]
+        cog = SimpleNamespace(
+            vlc=SimpleNamespace(run_async=AsyncMock(side_effect=[audio, subtitles])),
+            logger=Mock(),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction()
+
+        await view.advanced_options_button(interaction, None)
+
+        interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+        cog.vlc.run_async.assert_has_awaits([
+            call("get_audio_tracks"),
+            call("get_subtitle_tracks"),
+        ])
+        message = interaction.followup.send.await_args
+        advanced_view = message.kwargs["view"]
+        self.assertIsInstance(advanced_view, PlaybackAdvancedView)
+        self.assertTrue(any(isinstance(item, PlaybackAudioTrackSelect) for item in advanced_view.children))
+        self.assertTrue(any(isinstance(item, PlaybackSubtitleTrackSelect) for item in advanced_view.children))
+        self.assertIn("Audio tracks are available", message.args[0])
+        self.assertIn("Subtitle tracks and navigation are available", message.args[0])
+        self.assertTrue(message.kwargs["ephemeral"])
+
+    async def test_advanced_options_reports_empty_tracks_but_keeps_speed_control(self):
+        cog = SimpleNamespace(
+            vlc=SimpleNamespace(run_async=AsyncMock(return_value=[])),
+            logger=Mock(),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction()
+
+        await view.advanced_options_button(interaction, None)
+
+        message = interaction.followup.send.await_args
+        self.assertIn("did not report any audio tracks", message.args[0])
+        self.assertIn("did not report any subtitle tracks", message.args[0])
+        advanced_view = message.kwargs["view"]
+        self.assertEqual([type(item) for item in advanced_view.children], [PlaybackSpeedSelect])
+
+    async def test_advanced_options_reports_vlc_errors_ephemerally(self):
+        cog = SimpleNamespace(
+            vlc=SimpleNamespace(run_async=AsyncMock(side_effect=RuntimeError("VLC unavailable"))),
+            logger=Mock(),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction()
+
+        await view.advanced_options_button(interaction, None)
+
+        interaction.followup.send.assert_awaited_once_with(
+            "Advanced playback options are currently unavailable.",
+            ephemeral=True,
+        )
+        cog.logger.exception.assert_called_once()
+
+    async def test_queue_manager_reports_empty_queue_without_opening_controls(self):
+        playlist = ET.fromstring("<playlist />")
+        cog = SimpleNamespace(
+            vlc=SimpleNamespace(run_async=AsyncMock(return_value=({"queued_items": {}}, playlist))),
+            logger=Mock(),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction()
+
+        await view.manage_queue_button(interaction, None)
+
+        cog.vlc.run_async.assert_awaited_once_with("get_queue_snapshot")
+        interaction.followup.send.assert_awaited_once_with(
+            "There are no queued tracks to manage.",
+            ephemeral=True,
+        )
+
+    async def test_queue_manager_reports_unavailable_snapshot(self):
+        cog = SimpleNamespace(
+            vlc=SimpleNamespace(run_async=AsyncMock(side_effect=RuntimeError("VLC unavailable"))),
+            logger=Mock(),
+        )
+        view = PlaybackControlView(cog)
+        interaction = self.make_interaction()
+
+        await view.manage_queue_button(interaction, None)
+
+        interaction.followup.send.assert_awaited_once_with(
+            "The soft queue is currently unavailable.",
+            ephemeral=True,
+        )
+        cog.logger.exception.assert_called_once()

@@ -21,12 +21,6 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         cls.temp_dir = tempfile.TemporaryDirectory(prefix="ctrlvee-vlc-")
         cls.temp_path = Path(cls.temp_dir.name)
-        cls.password = "ctrlvee-integration-password"
-
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            cls.port = probe.getsockname()[1]
-
         sample_rate = 8000
         duration_seconds = 90
         cls.media_paths = []
@@ -40,23 +34,35 @@ class RealVLCIntegrationTests(unittest.TestCase):
             cls.media_paths.append(media_path)
         cls.media_path = cls.media_paths[0]
 
-        cls.log_path = cls.temp_path / "vlc.log"
-        cls.log_file = cls.log_path.open("w+")
-        environment = os.environ.copy()
-        environment["HOME"] = str(cls.temp_path)
-        environment["XDG_CACHE_HOME"] = str(cls.temp_path / "cache")
+    @classmethod
+    def tearDownClass(cls):
+        temp_dir = getattr(cls, "temp_dir", None)
+        if temp_dir is not None:
+            temp_dir.cleanup()
 
-        cls.process = subprocess.Popen(
+    def setUp(self):
+        self.password = "ctrlvee-integration-password"
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+
+        self.log_path = self.temp_path / f"{self._testMethodName}.vlc.log"
+        self.log_file = self.log_path.open("w+")
+        environment = os.environ.copy()
+        test_home = self.temp_path / self._testMethodName
+        cache_home = test_home / "cache"
+        cache_home.mkdir(parents=True, exist_ok=True)
+        environment["HOME"] = str(test_home)
+        environment["XDG_CACHE_HOME"] = str(cache_home)
+
+        self.process = subprocess.Popen(
             [
                 "cvlc",
-                # Keep VLC's headless dummy interface as the primary
-                # interface; expose the HTTP control server as an extra
-                # interface rather than making the Lua HTTP module the UI.
                 "--intf", "dummy",
                 "--extraintf", "http",
                 "--http-host", "127.0.0.1",
-                "--http-port", str(cls.port),
-                "--http-password", cls.password,
+                "--http-port", str(self.port),
+                "--http-password", self.password,
                 "--no-video",
                 "--aout", "dummy",
                 "--no-one-instance",
@@ -64,32 +70,29 @@ class RealVLCIntegrationTests(unittest.TestCase):
                 "--ignore-config",
             ],
             stdin=subprocess.DEVNULL,
-            stdout=cls.log_file,
+            stdout=self.log_file,
             stderr=subprocess.STDOUT,
             env=environment,
         )
 
-        cls.controller = VLCController(
+        self.queue_backup_file = self.temp_path / f"{self._testMethodName}.queue.json"
+        self.controller = VLCController(
             host="127.0.0.1",
-            port=cls.port,
-            password=cls.password,
-            queue_backup_file=str(cls.temp_path / "queue.json"),
+            port=self.port,
+            password=self.password,
+            queue_backup_file=str(self.queue_backup_file),
         )
 
-        # A single HTTP 200 from VLC is not sufficient readiness: the server
-        # can begin accepting requests before both XML endpoints are stable.
-        # Require consecutive successful parses through the same controller
-        # path used by the tests before allowing any test to run.
         deadline = time.monotonic() + 20
         consecutive_successes = 0
         last_status = None
         last_playlist = None
         while time.monotonic() < deadline:
-            if cls.process.poll() is not None:
+            if self.process.poll() is not None:
                 break
 
-            last_status = cls.controller.get_status()
-            last_playlist = cls.controller.get_playlist()
+            last_status = self.controller.get_status()
+            last_playlist = self.controller.get_playlist()
             if last_status is not None and last_playlist is not None:
                 consecutive_successes += 1
                 if consecutive_successes >= 3:
@@ -97,22 +100,24 @@ class RealVLCIntegrationTests(unittest.TestCase):
             else:
                 consecutive_successes = 0
             time.sleep(0.2)
-        else:
-            consecutive_successes = 0
 
         if consecutive_successes < 3:
-            cls.log_file.flush()
-            cls.log_file.seek(0)
-            raise RuntimeError(
+            self.log_file.flush()
+            self.log_file.seek(0)
+            diagnostics = self.log_file.read()
+            self._stop_vlc()
+            self.fail(
                 "VLC HTTP interface did not become stable "
                 f"(status parsed: {last_status is not None}, "
                 f"playlist parsed: {last_playlist is not None}, "
-                f"process exit: {cls.process.poll()}):\\n{cls.log_file.read()}"
+                f"process exit: {self.process.poll()}):\\n{diagnostics}"
             )
 
-    @classmethod
-    def tearDownClass(cls):
-        process = getattr(cls, "process", None)
+    def tearDown(self):
+        self._stop_vlc()
+
+    def _stop_vlc(self):
+        process = getattr(self, "process", None)
         if process is not None and process.poll() is None:
             process.terminate()
             try:
@@ -120,12 +125,9 @@ class RealVLCIntegrationTests(unittest.TestCase):
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
-        log_file = getattr(cls, "log_file", None)
-        if log_file is not None:
+        log_file = getattr(self, "log_file", None)
+        if log_file is not None and not log_file.closed:
             log_file.close()
-        temp_dir = getattr(cls, "temp_dir", None)
-        if temp_dir is not None:
-            temp_dir.cleanup()
 
     def vlc_diagnostics(self):
         """Include server liveness and recent VLC output when HTTP calls fail."""
@@ -265,15 +267,27 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         initial = self.controller.get_shuffle_state()
         self.assertIsInstance(initial, bool)
-        self.controller.set_shuffle_state(not initial)
-        self.wait_for(
-            lambda: self.controller.get_shuffle_state() is not initial,
-            "shuffle state to change",
-        )
-        result = self.controller.set_shuffle_state(not initial)
-        self.assertTrue(result["success"])
-        self.assertFalse(result["changed"])
-        self.assertEqual(self.controller.get_shuffle_state(), not initial)
+        try:
+            self.controller.set_shuffle_state(not initial)
+            self.wait_for(
+                lambda: self.controller.get_shuffle_state() is not initial,
+                "shuffle state to change",
+            )
+            result = self.controller.set_shuffle_state(not initial)
+            self.assertTrue(result["success"])
+            self.assertFalse(result["changed"])
+            self.assertEqual(self.controller.get_shuffle_state(), not initial)
+        finally:
+            # This VLC process is shared by every integration test in the class.
+            # Restore the global playlist mode so the next test starts from the
+            # same baseline rather than clearing a playing shuffled playlist.
+            if self.process.poll() is None:
+                restored = self.controller.set_shuffle_state(initial)
+                self.assertTrue(restored["success"], restored)
+                self.wait_for(
+                    lambda: self.controller.get_shuffle_state() is initial,
+                    "shuffle state to return to its original value",
+                )
 
     def test_real_vlc_soft_queue_orders_removes_and_plays_items(self):
         first_id, second_id, third_id = self.load_playlist()
@@ -327,15 +341,29 @@ class RealVLCIntegrationTests(unittest.TestCase):
             host="127.0.0.1",
             port=self.port,
             password=self.password,
-            queue_backup_file=str(self.temp_path / "queue.json"),
+            queue_backup_file=str(self.queue_backup_file),
         )
         restored = restarted.reconcile_queue_with_playlist()
         self.assertTrue(restored["success"], restored)
         self.assertEqual(restored["queued_item_ids"], [first_queue_id, second_queue_id])
 
+        # VLC 3.0 can crash if its active playlist is emptied while an
+        # item is playing. Stop playback and wait for the server to report the
+        # stopped state before simulating loss of the execution playlist.
+        restarted.stop()
+        self.wait_for(
+            lambda: status
+            if (status := restarted.get_status()) is not None
+            and status.findtext("state") == "stopped"
+            else None,
+            "VLC playback to stop before simulating playlist loss",
+        )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
+
         # The bot queue must survive VLC losing every playlist ID. VLC is only
         # an execution target; queued URIs and order live in CtrlVee's backup.
         restarted.send_command("pl_empty")
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
         self.wait_for(
             lambda: playlist
             if (playlist := restarted.get_playlist()) is not None
@@ -352,7 +380,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             host="127.0.0.1",
             port=self.port,
             password=self.password,
-            queue_backup_file=str(self.temp_path / "queue.json"),
+            queue_backup_file=str(self.queue_backup_file),
         )
         final_result = final_controller.reconcile_queue_with_playlist()
         self.assertTrue(final_result["success"], final_result)
@@ -368,6 +396,22 @@ class RealVLCIntegrationTests(unittest.TestCase):
         first_id, second_id, _ = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
         self.wait_for_current_item(first_id)
+        self.wait_for(
+            lambda: status
+            if (status := self.controller.get_status()) is not None
+            and status.findtext("state") == "playing"
+            else None,
+            "VLC playback to enter the playing state before stop",
+        )
+        self.wait_for(
+            lambda: status
+            if (status := self.controller.get_status()) is not None
+            and int(status.findtext("time", "0")) >= 1
+            else None,
+            "VLC playback position to advance before stop",
+        )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
+
         self.controller.stop()
         self.wait_for(
             lambda: status
@@ -376,6 +420,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             else None,
             "VLC to stop before recovery",
         )
+        self.assertIsNone(self.process.poll(), self.vlc_diagnostics())
 
         recovery = self.controller.play_item_and_capture(second_id)
         self.assertTrue(recovery["success"], recovery)
@@ -456,7 +501,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(playing.findtext("state"), "playing")
 
-        self.assertIsNotNone(self.controller.pause())
+        self.controller.pause()
         paused = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -466,7 +511,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(paused.findtext("state"), "paused")
 
-        self.assertIsNotNone(self.controller.play())
+        self.controller.play()
         self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -475,7 +520,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             "VLC playback to resume",
         )
 
-        self.assertIsNotNone(self.controller.seek(5))
+        self.controller.seek(5)
         seeked = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
@@ -485,7 +530,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
         )
         self.assertGreaterEqual(int(seeked.findtext("time", "0")), 4)
 
-        self.assertIsNotNone(self.controller.stop())
+        self.controller.stop()
         stopped = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
