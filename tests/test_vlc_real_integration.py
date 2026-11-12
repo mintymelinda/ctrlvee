@@ -49,8 +49,11 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.log_path = self.temp_path / f"{self._testMethodName}.vlc.log"
         self.log_file = self.log_path.open("w+")
         environment = os.environ.copy()
-        environment["HOME"] = str(self.temp_path / self._testMethodName)
-        environment["XDG_CACHE_HOME"] = str(self.temp_path / self._testMethodName / "cache")
+        test_home = self.temp_path / self._testMethodName
+        cache_home = test_home / "cache"
+        cache_home.mkdir(parents=True, exist_ok=True)
+        environment["HOME"] = str(test_home)
+        environment["XDG_CACHE_HOME"] = str(cache_home)
 
         self.process = subprocess.Popen(
             [
