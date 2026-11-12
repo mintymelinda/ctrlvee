@@ -75,11 +75,12 @@ class RealVLCIntegrationTests(unittest.TestCase):
             env=environment,
         )
 
+        self.queue_backup_file = self.temp_path / f"{self._testMethodName}.queue.json"
         self.controller = VLCController(
             host="127.0.0.1",
             port=self.port,
             password=self.password,
-            queue_backup_file=str(self.temp_path / f"{self._testMethodName}.queue.json"),
+            queue_backup_file=str(self.queue_backup_file),
         )
 
         deadline = time.monotonic() + 20
@@ -340,7 +341,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             host="127.0.0.1",
             port=self.port,
             password=self.password,
-            queue_backup_file=str(self.temp_path / "queue.json"),
+            queue_backup_file=str(self.queue_backup_file),
         )
         restored = restarted.reconcile_queue_with_playlist()
         self.assertTrue(restored["success"], restored)
