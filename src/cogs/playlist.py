@@ -397,6 +397,7 @@ class PlaylistCommands(commands.Cog):
             await ctx.send("The media library is still building its initial index. Try again when indexing finishes.")
             return
         results = await asyncio.to_thread(library.search, query, 20)
+        seasons = await asyncio.to_thread(library.find_seasons, query)
         if not results:
             suffix = " The initial index may still be running." if status["indexing"] else ""
             await ctx.send(f"No indexed media matched **{query}**.{suffix}")
@@ -413,6 +414,17 @@ class PlaylistCommands(commands.Cog):
         footer = f"Showing up to {len(results)} matches from the NAS index. Use queue_media with a unique title or full path."
         if status["indexing"]:
             footer += " Initial indexing is still running; results may be incomplete."
+        if seasons:
+            season_summary = ", ".join(
+                f"Season {item['season']} ({item['episode_count']} episodes)"
+                for item in seasons
+            )
+            embed.add_field(
+                name="Available TV seasons",
+                value=(season_summary[:1000] + ("…" if len(season_summary) > 1000 else ""))
+                      + "\nQueue one with queue_season <number> <series name>.",
+                inline=False,
+            )
         embed.set_footer(text=footer)
         await ctx.send(embed=embed)
 

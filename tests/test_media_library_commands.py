@@ -20,6 +20,27 @@ class MediaLibraryCommandTests(unittest.IsolatedAsyncioTestCase):
         }))
         self.ctx = SimpleNamespace(send=AsyncMock())
 
+    async def test_media_search_shows_available_seasons_for_a_series(self):
+        library = self.cog.watch_service.media_library
+        library.roots = [self.temp_dir.name]
+        library.status = Mock(return_value={"indexing": False, "indexed": 1})
+        library.search = Mock(return_value=[
+            {"path": "/media/Futurama/Futurama.S03E01.mkv", "name": "Futurama.S03E01.mkv", "media_type": "episode"},
+        ])
+        library.find_seasons = Mock(return_value=[
+            {"season": 3, "episode_count": 15, "file_count": 15},
+        ])
+
+        await PlaylistCommands.media_search.callback(
+            self.cog, self.ctx, query="Futurama"
+        )
+
+        library.search.assert_called_once_with("Futurama", 20)
+        library.find_seasons.assert_called_once_with("Futurama")
+        self.ctx.send.assert_awaited_once()
+        embed = self.ctx.send.await_args.kwargs["embed"]
+        self.assertIn("Season 3 (15 episodes)", embed.fields[0].value)
+
     async def test_queue_season_adds_all_episodes_in_catalogue_order_as_direct_uris(self):
         first = Path(self.temp_dir.name) / "Futurama.S03E01.The.Honking.mkv"
         second = Path(self.temp_dir.name) / "Futurama.S03E02.War.Is.the.H.Word.mkv"

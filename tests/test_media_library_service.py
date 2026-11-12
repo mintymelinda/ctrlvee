@@ -44,6 +44,17 @@ class MediaLibraryServiceTests(unittest.TestCase):
         self.library.refresh()
         self.assertEqual(self.library.search("later")[0]["path"], str(later))
 
+    def test_find_seasons_lists_episode_counts_without_counting_alternate_versions_twice(self):
+        self._write("TV/Futurama/Season 03/Futurama.S03E01.720p.mkv")
+        self._write("TV/Futurama/Season 03/Futurama.S03E01.1080p.mkv")
+        self._write("TV/Futurama/Season 03/Futurama.S03E02.mkv")
+        self._write("TV/Futurama/Season 04/Futurama.S04E01.mkv")
+        self.library.refresh()
+        self.assertEqual(self.library.find_seasons("Futurama"), [
+            {"season": 3, "episode_count": 2, "file_count": 3},
+            {"season": 4, "episode_count": 1, "file_count": 1},
+        ])
+
     def test_season_lookup_uses_episode_numbers_and_parent_directory_series_name(self):
         expected = [
             self._write("TV/Futurama/Season 03/S03E02 - War Is the H Word.mkv"),

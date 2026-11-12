@@ -401,6 +401,41 @@ class MediaLibraryService:
                 ).fetchall()
         return [self._row_to_dict(row) for row in rows]
 
+    def find_seasons(self, series_query: str) -> list[dict]:
+        """List indexed seasons for a series, counting unique episode numbers."""
+        tokens = self._tokens(series_query)
+        if not tokens:
+            return []
+        with self._database() as db:
+            if self._fts_enabled:
+                match = "series_title : (" + " AND ".join(f'"{token}"' for token in tokens) + ")"
+                rows = db.execute("""
+                    SELECT m.season, count(DISTINCT m.episode) AS episode_count,
+                           count(*) AS file_count
+                    FROM media_files_fts
+                    JOIN media_files m ON m.rowid = media_files_fts.rowid
+                    WHERE media_files_fts MATCH ?
+                      AND m.season IS NOT NULL AND m.episode IS NOT NULL
+                    GROUP BY m.season
+                    ORDER BY m.season
+                """, (match,)).fetchall()
+            else:
+                clauses = " AND ".join("lower(series_title) LIKE ?" for _ in tokens)
+                rows = db.execute(
+                    f"SELECT season, count(DISTINCT episode) AS episode_count, count(*) AS file_count "
+                    f"FROM media_files WHERE {clauses} AND season IS NOT NULL AND episode IS NOT NULL "
+                    "GROUP BY season ORDER BY season",
+                    tuple(f"%{token}%" for token in tokens),
+                ).fetchall()
+        return [
+            {
+                "season": row["season"],
+                "episode_count": row["episode_count"],
+                "file_count": row["file_count"],
+            }
+            for row in rows
+        ]
+
     def is_available(self, path: str) -> bool:
         """Revalidate an indexed path before queueing; reject missing/out-of-root targets."""
         candidate = os.path.realpath(path)
