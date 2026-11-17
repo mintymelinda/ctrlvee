@@ -207,6 +207,30 @@ class RealVLCIntegrationTests(unittest.TestCase):
             f"VLC to select playlist item {item_id}",
         )
 
+    def wait_for_playing_item(self, item_id):
+        """Wait until VLC has opened and started the selected playlist item."""
+        def is_playing_item():
+            playlist = self.controller.get_playlist()
+            if playlist is None or not any(
+                item.get("id") == str(item_id) and item.get("current")
+                for item in playlist.findall(".//leaf")
+            ):
+                return None
+
+            status = self.controller.get_status()
+            if (
+                status is not None
+                and status.findtext("state") == "playing"
+                and status.findtext("currentplid") == str(item_id)
+            ):
+                return playlist
+            return None
+
+        return self.wait_for(
+            is_playing_item,
+            f"VLC to start playing playlist item {item_id}",
+        )
+
     def wait_for_current_uri(self, media_uri):
         return self.wait_for(
             lambda: item.get("id")
@@ -223,14 +247,16 @@ class RealVLCIntegrationTests(unittest.TestCase):
     def test_real_vlc_playlist_navigation_and_repeat_modes(self):
         first_id, second_id, third_id = self.load_playlist()
         self.controller.play_item(first_id)
-        self.wait_for_current_item(first_id)
+        self.wait_for_playing_item(first_id)
 
-        # VLC may execute navigation while returning an empty HTTP body. The
-        # selected playlist item, not the response XML, is the acknowledgement.
+        # A playlist's current marker is updated before VLC's input thread is
+        # necessarily ready. Wait for the active input to reach "playing"
+        # before issuing another navigation command; otherwise pl_next can race
+        # input startup in headless VLC and crash the VLC process.
         self.controller.next()
-        self.wait_for_current_item(second_id)
+        self.wait_for_playing_item(second_id)
         self.controller.previous()
-        self.wait_for_current_item(first_id)
+        self.wait_for_playing_item(first_id)
 
         # VLC exposes repeat-current and repeat-playlist as independent toggles.
         self.assertEqual(self.controller.get_repeat_state(), "none")
