@@ -365,7 +365,10 @@ class RealVLCIntegrationTests(unittest.TestCase):
         self.assertEqual(remaining[second["queue_id"]]["queue_order"], 1)
 
         queued_play = self.controller.play_next_queued_item()
-        self.assertTrue(queued_play["success"], queued_play)
+        self.assertTrue(
+            queued_play["success"],
+            f"{queued_play}\n{self.vlc_diagnostics()}",
+        )
         current = self.wait_for_current_uri(self.media_paths[2].as_uri())
         self.assertEqual(queued_play["item_id"], current)
         self.assertEqual(queued_play["queue_id"], second["queue_id"])
