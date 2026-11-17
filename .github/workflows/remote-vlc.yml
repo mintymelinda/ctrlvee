@@ -1,0 +1,51 @@
+name: Remote VLC integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-vlc:
+    name: Synology LAN VLC integration
+    if: github.ref == 'refs/heads/main'
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - vlc-lan
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate remote VLC configuration
+        env:
+          REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
+          REMOTE_VLC_MEDIA_DIR: ${{ vars.REMOTE_VLC_MEDIA_DIR }}
+        run: |
+          test -n "$REMOTE_VLC_PASSWORD" || { echo "REMOTE_VLC_PASSWORD secret is required"; exit 1; }
+          test -n "$REMOTE_VLC_MEDIA_DIR" || { echo "REMOTE_VLC_MEDIA_DIR repository variable is required"; exit 1; }
+          test -d "$REMOTE_VLC_MEDIA_DIR" || { echo "Remote VLC media directory does not exist on this runner"; exit 1; }
+          test -w "$REMOTE_VLC_MEDIA_DIR" || { echo "Remote VLC media directory is not writable by this runner"; exit 1; }
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+
+      - name: Run real LAN VLC integration test
+        env:
+          REMOTE_VLC_HOST: 127.0.0.1
+          REMOTE_VLC_PORT: "18080"
+          REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
+          REMOTE_VLC_MEDIA_DIR: ${{ vars.REMOTE_VLC_MEDIA_DIR }}
+        run: python -m unittest tests.test_vlc_remote_integration -v
