@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   unittest:
-    name: Python unit tests
+    name: Mocked Discord and Python unit tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -30,7 +30,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
 
-      - name: Run unit tests
+      - name: Run mocked Discord and application unit tests
         run: python -m unittest discover --start-directory tests --pattern "test_*.py" --verbose
 
   docker-build:
