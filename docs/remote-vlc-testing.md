@@ -31,9 +31,12 @@ Clone the repository to a stable Synology path, for example /volume1/docker/ctrl
 
 Restrict the file permissions so only the deployment administrator can read it. Then run:
 
-    cd /volume1/docker/ctrlvee/infra/remote-vlc
-    docker compose --env-file .env -f compose.yaml config --quiet
-    docker compose --env-file .env -f compose.yaml up -d --build
+    cd /volume1/docker/ctrlvee/ctrlvee-vlc-test
+    cp .env.example .env
+    # Edit .env and set a unique VLC_TEST_PASSWORD and the media directory.
+    chmod 600 .env
+    docker compose -f docker-compose.yml config --quiet
+    docker compose -f docker-compose.yml up -d --build
 
 The container:
 - runs VLC as an unprivileged user;
