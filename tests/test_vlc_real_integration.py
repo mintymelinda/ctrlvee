@@ -528,17 +528,50 @@ class RealVLCIntegrationTests(unittest.TestCase):
             "VLC playback to resume",
         )
 
-        self.controller.seek(5)
+        before_seek = self.controller.get_status()
+        self.assertIsNotNone(before_seek, self.vlc_diagnostics())
+        self.assertLess(
+            int(before_seek.findtext("time", "0")),
+            19,
+            "Playback unexpectedly reached the seek target before the seek command",
+        )
+
+        # Seek well ahead of the natural playback position so the test proves
+        # VLC applied the seek instead of passing on ordinary playback progress.
+        self.controller.seek(20)
         seeked = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
-            and int(status.findtext("time", "0")) >= 4
+            and int(status.findtext("time", "0")) >= 19
             else None,
-            "VLC playback position to advance after seek",
+            "VLC playback position to reach the seek target",
         )
-        self.assertGreaterEqual(int(seeked.findtext("time", "0")), 4)
+        seeked_time = int(seeked.findtext("time", "0"))
+        self.assertGreaterEqual(seeked_time, 19)
+        self.assertIsNone(
+            self.process.poll(),
+            f"VLC exited while processing the seek command\\n{self.vlc_diagnostics()}",
+        )
+
+        # Wait for playback to advance beyond the seek result before stopping.
+        # This lets VLC finish the input/decoder transition triggered by seeking.
+        advanced = self.wait_for(
+            lambda: status
+            if (status := self.controller.get_status()) is not None
+            and int(status.findtext("time", "0")) > seeked_time
+            else None,
+            "VLC playback to advance after seeking",
+        )
+        self.assertGreater(
+            int(advanced.findtext("time", "0")),
+            seeked_time,
+        )
 
         self.controller.stop()
+        self.assertIsNone(
+            self.process.poll(),
+            f"VLC exited while processing the stop command\\n{self.vlc_diagnostics()}",
+        )
         stopped = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
