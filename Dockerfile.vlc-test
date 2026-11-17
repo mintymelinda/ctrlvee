@@ -1,0 +1,19 @@
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates vlc \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home --home-dir /home/vlc --shell /usr/sbin/nologin vlc
+
+COPY infra/remote-vlc/entrypoint.sh /usr/local/bin/ctrlvee-vlc-test-entrypoint
+RUN chmod 0755 /usr/local/bin/ctrlvee-vlc-test-entrypoint
+
+USER 10001:10001
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/ctrlvee-vlc-test-entrypoint"]
