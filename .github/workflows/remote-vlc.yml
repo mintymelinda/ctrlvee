@@ -48,4 +48,4 @@ jobs:
           REMOTE_VLC_PORT: "18080"
           REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
           REMOTE_VLC_MEDIA_DIR: ${{ vars.REMOTE_VLC_MEDIA_DIR }}
-        run: python -m unittest tests.test_vlc_remote_integration -v
+        run: python tests/test_vlc_remote_integration.py
