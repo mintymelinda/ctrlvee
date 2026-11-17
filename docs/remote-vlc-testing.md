@@ -24,12 +24,7 @@ Create it in DSM File Station or over SSH. Give the dedicated GitHub runner acco
 
 ## 3. Deploy the test VLC container
 
-Clone the repository to a stable Synology path, for example /volume1/docker/ctrlvee, and check out the reviewed main branch. In infra/remote-vlc, create a local .env file (never commit it):
-
-    VLC_TEST_PASSWORD=replace-with-a-long-random-password
-    VLC_TEST_MEDIA_DIR=/volume1/docker/ctrlvee-vlc-test/media
-
-Restrict the file permissions so only the deployment administrator can read it. Then run:
+Clone the repository to a stable Synology path, for example /volume1/docker/ctrlvee, and check out the reviewed main branch. The self-contained Compose deployment is in ctrlvee-vlc-test/. Copy its example environment file, set a unique long password and the dedicated host media directory, and keep the real .env file private:
 
     cd /volume1/docker/ctrlvee/ctrlvee-vlc-test
     cp .env.example .env
@@ -45,8 +40,9 @@ The container:
 - has its HTTP interface bound to container port 8080;
 - publishes that port only as 127.0.0.1:18080 on the Synology host.
 
-Check it locally on the Synology:
+Check it locally on the Synology (the source command loads VLC_TEST_PASSWORD from the local .env into your shell):
 
+    . ./.env
     curl --fail --silent --show-error \
       --user ":$VLC_TEST_PASSWORD" \
       http://127.0.0.1:18080/requests/status.xml
