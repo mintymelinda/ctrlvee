@@ -346,3 +346,37 @@ docker run --rm ctrlvee:vlc-integration
 ```
 
 This image is for tests only; it does not change the production Compose deployment or the remote-VLC architecture.
+
+### Discord integration tests
+
+The production Docker image already installs `discord.py[voice]` from
+`requirements.txt`; Discord itself is a hosted service, so the container runs
+the CtrlVee bot rather than a Discord server or desktop client.
+
+Every pull request runs the mocked/offline Discord-facing unit tests as part of
+the normal Python test suite. These tests do not need a Discord token and never
+contact Discord.
+
+The real Discord smoke test is optional. To enable it in GitHub Actions, add
+these repository Actions secrets:
+
+- `DISCORD_TEST_BOT_TOKEN`: token for a dedicated test bot.
+- `DISCORD_TEST_GUILD_ID`: ID of a private test server where that bot is installed.
+- `DISCORD_TEST_TEXT_CHANNEL_ID` (optional): test text channel; checks view,
+  send-message, and embed permissions without sending a message.
+- `DISCORD_TEST_VOICE_CHANNEL_ID` (optional): test voice channel; checks view,
+  connect, and speak permissions without joining the channel.
+
+When the required token and guild ID are absent (for example, on forked PRs
+where repository secrets are unavailable), the live check reports a skip and
+does not fail the build. When configured, it authenticates through the Discord
+gateway, verifies the test guild is visible, and checks any optional channel
+permissions. It is read-only: it does not send messages, join voice, or alter
+server configuration.
+
+Run the live check manually with the same environment variables:
+
+```sh
+python tests/test_discord_live_integration.py
+```
+

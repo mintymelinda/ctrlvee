@@ -2,6 +2,8 @@ name: Tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -12,7 +14,7 @@ permissions:
 
 jobs:
   unittest:
-    name: Python unit tests
+    name: Mocked Discord and Python unit tests
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -30,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
 
-      - name: Run unit tests
+      - name: Run mocked Discord and application unit tests
         run: python -m unittest discover --start-directory tests --pattern "test_*.py" --verbose
 
   docker-build:
@@ -51,13 +53,14 @@ jobs:
       - name: Smoke-test application imports in the built image
         run: |
           docker run --rm --entrypoint python ctrlvee:ci -c "
+          import discord
           from src.config import Config
           from src.services.vlc_controller import VLCController
           from src.services.watch_folder_service import WatchFolderService
           from src.cogs.playback import PlaybackCommands
           from src.cogs.scheduler import Scheduler
           from src.cogs.watch import WatchCommands
-          print('CtrlVee runtime imports OK')
+          print(f'CtrlVee runtime imports OK (discord.py {discord.__version__})')
           "
 
   real-vlc-integration:
@@ -72,3 +75,19 @@ jobs:
 
       - name: Run controller tests against real VLC
         run: docker run --rm ctrlvee:vlc-integration
+
+      - name: Run optional live Discord test-server checks
+        env:
+          DISCORD_TEST_BOT_TOKEN: ${{ secrets.DISCORD_TEST_BOT_TOKEN }}
+          DISCORD_TEST_GUILD_ID: ${{ secrets.DISCORD_TEST_GUILD_ID }}
+          DISCORD_TEST_TEXT_CHANNEL_ID: ${{ secrets.DISCORD_TEST_TEXT_CHANNEL_ID }}
+          DISCORD_TEST_VOICE_CHANNEL_ID: ${{ secrets.DISCORD_TEST_VOICE_CHANNEL_ID }}
+        run: |
+          docker run --rm \
+            -e DISCORD_TEST_BOT_TOKEN \
+            -e DISCORD_TEST_GUILD_ID \
+            -e DISCORD_TEST_TEXT_CHANNEL_ID \
+            -e DISCORD_TEST_VOICE_CHANNEL_ID \
+            --entrypoint python \
+            ctrlvee:vlc-integration \
+            tests/test_discord_live_integration.py
