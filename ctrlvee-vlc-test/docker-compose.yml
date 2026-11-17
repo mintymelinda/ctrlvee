@@ -1,0 +1,26 @@
+name: ctrlvee-vlc-test
+
+services:
+  vlc-test:
+    build:
+      context: ..
+      dockerfile: Dockerfile.vlc-test
+    image: ctrlvee-vlc-test:local
+    container_name: ctrlvee-vlc-test
+    init: true
+    restart: unless-stopped
+    environment:
+      VLC_TEST_PASSWORD: ${VLC_TEST_PASSWORD:?Set VLC_TEST_PASSWORD in .env}
+    ports:
+      # Keep the VLC control API local to the Synology host.
+      - "127.0.0.1:18080:8080"
+    volumes:
+      # The runner writes fixtures here; VLC reads them through /media.
+      - ${VLC_TEST_MEDIA_DIR:-./media}:/media:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
