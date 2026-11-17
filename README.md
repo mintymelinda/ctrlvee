@@ -63,6 +63,12 @@ For NAS library search and direct queueing, mount the media folders into the con
 - `compose.yaml` starts the bot with restart policy, a read-only application filesystem, and persistent state.
 - `.dockerignore` keeps local environments, credentials, and data out of the image.
 
+### Private Synology remote-VLC integration environment
+
+A separate, opt-in deployment is available for testing CtrlVee against a dedicated VLC instance on the Synology LAN. The test VLC HTTP interface binds only to the Synology loopback address; it is not exposed through the reverse proxy or public internet. A repository-scoped self-hosted runner executes the remote checks only when manually dispatched from trusted main.
+
+See [Private Synology VLC integration environment](docs/remote-vlc-testing.md) for deployment, runner registration, GitHub secrets, and remote administration instructions.
+
 ## Quick Setup
 
 1. Clone this repository.
