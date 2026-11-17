@@ -43,11 +43,13 @@ Run these commands from this directory:
 
 ## Verify the endpoint locally
 
-From the Synology host:
+From this directory on the Synology host:
 
-    docker compose exec vlc-test true
+    set -a
+    . ./.env
+    set +a
     curl --fail --silent --show-error \
-      --user ":$(grep '^VLC_TEST_PASSWORD=' .env | cut -d= -f2-)" \
+      --user ":$VLC_TEST_PASSWORD" \
       http://127.0.0.1:18080/requests/status.xml
 
 A successful response is VLC status XML.
