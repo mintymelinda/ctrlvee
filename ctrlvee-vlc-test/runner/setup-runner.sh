@@ -127,6 +127,10 @@ run_as_runner "test -r '$SCRIPT_DIR/install-runner.sh' && test -x '$SCRIPT_DIR' 
     || fail "Runner account cannot read the installer or write its private runner directory."
 run_as_runner "test -r '$MEDIA_DIR' && test -x '$MEDIA_DIR' && ! test -w '$MEDIA_DIR'" \
     || fail "Runner account does not have strictly read-only access to the media directory."
+run_as_runner "find '$MEDIA_DIR' -type d -exec test ! -w {} \\;" \
+    || fail "Runner account can write to one or more media directories."
+run_as_runner "find '$MEDIA_DIR' -type f -exec test -r {} \\; -exec test ! -w {} \\;" \
+    || fail "Runner account cannot read every media file or can write to one or more media files."
 if [ -S /var/run/docker.sock ]; then
     run_as_runner "test ! -r /var/run/docker.sock && test ! -w /var/run/docker.sock" \
         || fail "Runner account can access the Docker socket; remove that permission before continuing."
