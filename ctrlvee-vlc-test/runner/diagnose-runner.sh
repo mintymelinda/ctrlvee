@@ -82,7 +82,7 @@ done
 
 section "System commands"
 # Required by the bootstrapper, installer, runner configuration and diagnostics.
-for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp; do
+for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp mkdir cat chmod; do
     check_command "$command_name" required
 done
 if command -v ldd >/dev/null 2>&1; then
