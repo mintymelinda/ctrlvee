@@ -85,6 +85,7 @@ for start in "$SCRIPT_DIR" "$MEDIA_DIR"; do
     while [ "$path" != "/" ]; do
         [ -d "$path" ] || fail "Expected parent directory is missing: $path"
         remove_runner_acl "$path"
+        ensure_acl "$path" "user:$RUNNER_USER:allow:--x----------:----"
         path=$(dirname "$path")
     done
 done
