@@ -13,8 +13,9 @@ This directory installs the **official GitHub Actions self-hosted runner** direc
 
 3. The setup script creates the dedicated DSM account `ctrlvee-runner` if it does not already exist. It generates an unguessable random password that is never displayed or saved, gives the account no DSM application privileges, and refuses to use an account in the `administrators` group.
 4. It removes stale per-user ACL entries left by earlier setup attempts, restores traversal-only access on each parent directory, grants read/traverse access to the runner scripts, and grants read-only access to actual media directories and files. It deliberately does not add DENY entries to parent directories: Synology can propagate those entries into child media folders and block fixture access. The runner's ability to list parent-directory names therefore follows the NAS's existing ACLs; this setup does not promise to hide those names. It verifies that the runner can read fixtures but cannot write media directories or files, read the local VLC `.env` file, or access the Docker socket when present. Synology `@eaDir`, recycle-bin, snapshot, and temporary metadata trees are excluded from fixture permissions and checks.
-5. The script downloads the official GitHub Actions runner v2.338.2, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token **as the unprivileged runner account**. The token is not written to disk or shell history.
-6. Start the runner:
+5. The script downloads the official GitHub Actions runner v2.338.2 and verifies its pinned SHA-256 checksum. If DSM does not provide `ldd`, the installer creates a private `actions-runner/.local-tools/ldd` compatibility helper backed by DSM's glibc dynamic loader and adds it to `PATH` for runner configuration. It does not modify system libraries or require installing a Linux package.
+6. The installer prompts for the short-lived registration token **as the unprivileged runner account**. The token is not written to disk or shell history.
+7. Start the runner:
 
    ```sh
    sudo -u ctrlvee-runner /bin/sh ctrlvee-vlc-test/runner/run-runner.sh
@@ -43,7 +44,7 @@ Keep the runner process running in the foreground under Task Scheduler. Do not c
 
 ## Requirements and security
 
-- Synology DSM on x86_64 (the workflow also requires the `x64` label).
+- Synology DSM on x86_64 with its glibc dynamic loader (the workflow also requires the `x64` label). A system `ldd` command is optional; the installer supplies a runner-local compatibility helper when needed.
 - Run the setup script through `sudo` from an interactive SSH terminal.
 - Outbound HTTPS access to GitHub.
 - DSM `synouser` and `synoacltool`, plus `openssl`, `curl`, `tar`, `sha256sum`, `find`, and `su`.
