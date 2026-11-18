@@ -49,7 +49,7 @@ fi
 ensure_acl() {
     path=$1
     entry=$2
-    current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null) || fail "Could not inspect ACL on $path."
+    current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null || true)
     case "$current" in
         *"$entry"*) ;;
         *) "$SYNOACLTOOL" -add "$path" "$entry" >/dev/null || fail "Could not apply runner ACL to $path." ;;
@@ -78,7 +78,7 @@ find "$MEDIA_DIR" -type d -exec sh -c '
     user=$2
     shift 2
     for path do
-        current=$("$tool" -get "$path" 2>/dev/null) || exit 1
+        current=$("$tool" -get "$path" 2>/dev/null || true)
         case "$current" in
             *"user:$user:allow:"*) ;;
             *) "$tool" -add "$path" "user:$user:allow:r-x----------:fd--" >/dev/null || exit 1 ;;
@@ -91,7 +91,7 @@ find "$MEDIA_DIR" -type f -exec sh -c '
     user=$2
     shift 2
     for path do
-        current=$("$tool" -get "$path" 2>/dev/null) || exit 1
+        current=$("$tool" -get "$path" 2>/dev/null || true)
         case "$current" in
             *"user:$user:allow:"*) ;;
             *) "$tool" -add "$path" "user:$user:allow:r-----------:----" >/dev/null || exit 1 ;;
@@ -109,7 +109,7 @@ chown -R "$RUNNER_USER" "$RUNNER_DIR"
 chmod 700 "$RUNNER_DIR"
 
 run_as_runner() {
-    su -s /bin/sh "$RUNNER_USER" -c "$1"
+    su -s /bin/sh -c "$1" "$RUNNER_USER"
 }
 
 # Fail closed if the account can browse parent directories or read the VLC
@@ -127,6 +127,14 @@ run_as_runner "test -r '$SCRIPT_DIR/install-runner.sh' && test -x '$SCRIPT_DIR' 
     || fail "Runner account cannot read the installer or write its private runner directory."
 run_as_runner "test -r '$MEDIA_DIR' && test -x '$MEDIA_DIR' && ! test -w '$MEDIA_DIR'" \
     || fail "Runner account does not have strictly read-only access to the media directory."
+run_as_runner "find '$MEDIA_DIR' -type d -exec sh -c 'for path do test ! -w \"\$path\" || exit 1; done' sh {} +" \
+    || fail "Runner account can write to one or more media directories."
+run_as_runner "find '$MEDIA_DIR' -type f -exec sh -c 'for path do test -r \"\$path\" && test ! -w \"\$path\" || exit 1; done' sh {} +" \
+    || fail "Runner account cannot read every media file or can write to one or more media files."
+if [ -S /var/run/docker.sock ]; then
+    run_as_runner "test ! -r /var/run/docker.sock && test ! -w /var/run/docker.sock" \
+        || fail "Runner account can access the Docker socket; remove that permission before continuing."
+fi
 if [ -f "$VLC_ENV" ]; then
     run_as_runner "test ! -r '$VLC_ENV'" \
         || fail "Runner account can read $VLC_ENV. Restrict that file before continuing."

@@ -12,7 +12,7 @@ This directory installs the **official GitHub Actions self-hosted runner** direc
    ```
 
 3. The setup script creates the dedicated DSM account `ctrlvee-runner` if it does not already exist. It generates an unguessable random password that is never displayed or saved, gives the account no DSM application privileges, and refuses to use an account in the `administrators` group.
-4. It grants the account traversal-only access to the repository's parent directories, read/traverse access to the runner scripts, and read-only access to `/volume1/docker/ctrlvee-vlc-test/media`. It checks that the account cannot list parent directories, write to the media directory, or read the local VLC `.env` file.
+4. It grants the account traversal-only access to the repository's parent directories, read/traverse access to the runner scripts, and read-only access to `/volume1/docker/ctrlvee-vlc-test/media`. It checks that the account cannot list parent directories, write to any media directory or file, read the local VLC `.env` file, or access the Docker socket when present.
 5. The script downloads the official GitHub Actions runner v2.338.2, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token **as the unprivileged runner account**. The token is not written to disk or shell history.
 6. Start the runner:
 

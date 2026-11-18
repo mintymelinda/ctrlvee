@@ -55,7 +55,7 @@ printf '\n'
 [ -n "$RUNNER_TOKEN" ] || fail "Registration token cannot be empty."
 
 mkdir -p "$RUNNER_DIR"
-TMP_ARCHIVE=$(mktemp "${SCRIPT_DIR}/.runner-download.XXXXXX")
+TMP_ARCHIVE=$(mktemp "${RUNNER_DIR}/.runner-download.XXXXXX")
 
 printf 'Downloading official runner v%s...\n' "$RUNNER_VERSION"
 curl --fail --location --silent --show-error --retry 3 \

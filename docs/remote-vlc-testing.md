@@ -59,7 +59,7 @@ The repository includes an account bootstrapper, runner installer, and startup s
 
     sudo sh ctrlvee-vlc-test/runner/setup-runner.sh
 
-The bootstrapper uses DSM's `synouser` to create the dedicated non-administrator account `ctrlvee-runner` with a generated, unguessable password that is never displayed or saved. It uses `synoacltool` to grant traversal-only access to parent directories, read/traverse access to the runner scripts, and read-only access to the fixed test media directory. It checks that the runner cannot list parent directories, write to the media directory, or read the local VLC `.env` password file. It then drops privileges and runs the installer as `ctrlvee-runner`.
+The bootstrapper uses DSM's `synouser` to create the dedicated non-administrator account `ctrlvee-runner` with a generated, unguessable password that is never displayed or saved. It uses `synoacltool` to grant traversal-only access to parent directories, read/traverse access to the runner scripts, and read-only access to the fixed test media directory. It checks that the runner cannot list parent directories, write to any media directory or file, read the local VLC `.env` password file, or access the Docker socket when present. It then drops privileges and runs the installer as `ctrlvee-runner`.
 
 The installer downloads the official GitHub Actions runner v2.338.2 release for Linux x64, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token. It configures the runner as `synology-vlc-lan` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels automatically. The token is not saved.
 
