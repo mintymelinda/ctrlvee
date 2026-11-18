@@ -20,7 +20,7 @@ Create the fixed host directory used by both Compose and the runner:
 
     mkdir -p /volume1/docker/ctrlvee-vlc-test/media
 
-Place one or more representative audio/video files in this directory (subdirectories are supported). The integration test discovers up to five supported files automatically. The runner account needs read/traverse access; it does not need write access. The VLC container mounts this directory read-only.
+Place one or more representative audio/video files in this directory (subdirectories are supported). The integration test discovers up to five supported files automatically. The runner account needs read/traverse access; it does not need write access. Files and directories must also be readable/traversable by the VLC container's unprivileged UID 10001. The VLC container mounts this directory read-only.
 
 Do not point this directory at the production media library.
 
@@ -57,7 +57,7 @@ The response should be VLC status XML. Do not test by opening port 18080 from th
 
 Use a dedicated, non-administrator DSM account for the runner. It needs:
 - access to the repository working directory;
-- read/traverse access to /volume1/docker/ctrlvee-vlc-test/media;
+- read/traverse access to /volume1/docker/ctrlvee-vlc-test/media;\n- media files readable by the VLC container's UID 10001;
 - no access to production media or production VLC credentials;
 - no Docker socket or general container-management privileges.
 
