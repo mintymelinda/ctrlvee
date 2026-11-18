@@ -51,11 +51,20 @@ fi
 # access to the media subtree. Inherited ACEs are not deleted by this command.
 remove_runner_acl() {
     path=$1
-    current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null || true)
-    if printf '%s\n' "$current" | grep -F "user:$RUNNER_USER:" | grep -Fq "(level:0)"; then
-        "$SYNOACLTOOL" -del "$path" "user:$RUNNER_USER" >/dev/null \
-            || fail "Could not remove the previous runner ACL entries from $path."
-    fi
+    while :; do
+        current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null || true)
+        index=$(printf '%s\n' "$current" | awk -v entry="user:$RUNNER_USER:" '
+            index($0, entry) && index($0, "(level:0)") {
+                token=$1
+                gsub(/[^0-9]/, "", token)
+                print token
+                exit
+            }
+        ')
+        [ -n "$index" ] || break
+        "$SYNOACLTOOL" -del "$path" "$index" >/dev/null \
+            || fail "Could not remove a previous runner ACL entry from $path."
+    done
 }
 
 ensure_acl() {
@@ -95,10 +104,19 @@ find "$MEDIA_DIR" \
         user=$2
         shift 2
         for path do
-            current=$("$tool" -get "$path" 2>/dev/null || true)
-            if printf "%s\n" "$current" | grep -F "user:$user:" | grep -Fq "(level:0)"; then
-                "$tool" -del "$path" "user:$user" >/dev/null || exit 1
-            fi
+            while :; do
+                current=$("$tool" -get "$path" 2>/dev/null || true)
+                index=$(printf "%s\n" "$current" | awk -v entry="user:$user:" '
+                    index($0, entry) && index($0, "(level:0)") {
+                        token=$1
+                        gsub(/[^0-9]/, "", token)
+                        print token
+                        exit
+                    }
+                ')
+                [ -n "$index" ] || break
+                "$tool" -del "$path" "$index" >/dev/null || exit 1
+            done
             "$tool" -add "$path" "user:$user:allow:r-x----------:----" >/dev/null || exit 1
         done
     ' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + \
@@ -112,10 +130,19 @@ find "$MEDIA_DIR" \
         user=$2
         shift 2
         for path do
-            current=$("$tool" -get "$path" 2>/dev/null || true)
-            if printf "%s\n" "$current" | grep -F "user:$user:" | grep -Fq "(level:0)"; then
-                "$tool" -del "$path" "user:$user" >/dev/null || exit 1
-            fi
+            while :; do
+                current=$("$tool" -get "$path" 2>/dev/null || true)
+                index=$(printf "%s\n" "$current" | awk -v entry="user:$user:" '
+                    index($0, entry) && index($0, "(level:0)") {
+                        token=$1
+                        gsub(/[^0-9]/, "", token)
+                        print token
+                        exit
+                    }
+                ')
+                [ -n "$index" ] || break
+                "$tool" -del "$path" "$index" >/dev/null || exit 1
+            done
             "$tool" -add "$path" "user:$user:allow:r-----------:----" >/dev/null || exit 1
         done
     ' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + \
