@@ -74,11 +74,6 @@ if command -v ldd >/dev/null 2>&1; then
     [ -z "$MISSING_LIBRARIES" ] || fail "The Synology host is missing runner libraries: $MISSING_LIBRARIES"
 fi
 
-if command -v ldd >/dev/null 2>&1; then
-    MISSING_LIBRARIES=$(ldd "$RUNNER_DIR/bin/Runner.Listener" 2>/dev/null | grep "not found" || true)
-    [ -z "$MISSING_LIBRARIES" ] || fail "The Synology host is missing runner libraries: $MISSING_LIBRARIES"
-fi
-
 cd "$RUNNER_DIR"
 ./config.sh \
     --url "$REPOSITORY_URL" \
