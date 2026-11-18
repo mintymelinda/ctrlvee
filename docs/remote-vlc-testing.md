@@ -20,7 +20,7 @@ Create the fixed host directory used by both Compose and the runner:
 
     mkdir -p /volume1/docker/ctrlvee-vlc-test/media
 
-Place one or more representative audio/video files in this directory (subdirectories are supported). The integration test discovers up to five supported files automatically. The runner account needs read/traverse access; it does not need write access. Files and directories must also be readable/traversable by the VLC container's unprivileged UID 10001. The VLC container mounts this directory read-only.
+Place one or more representative audio/video files in this directory (subdirectories are supported). The integration test discovers all supported files automatically. The runner account needs read/traverse access; it does not need write access. Files and directories must also be readable/traversable by the VLC container's unprivileged UID 10001. The VLC container mounts this directory read-only.
 
 Do not point this directory at the production media library.
 
@@ -101,7 +101,7 @@ The workflow is manually dispatched only, explicitly checks out main, and target
 
 The remote test:
 1. verifies status and playlist access;
-2. discovers up to five supported audio/video files in the dedicated media directory (including subdirectories);
+2. discovers all supported audio/video files in the dedicated media directory (including subdirectories);
 3. asks VLC to enqueue and play each selected file;
 4. verifies pause, resume, and stop for every selected file, and seek when the file is at least 35 seconds long;
 5. removes only the playlist items created by that test.
