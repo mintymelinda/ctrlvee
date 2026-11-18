@@ -16,33 +16,35 @@ Do not expose SSH to the public internet. QuickConnect can remain enabled for DS
 
 ## 2. Create the isolated test media directory
 
-Choose a persistent volume path. The examples use:
+Create the fixed host directory used by both Compose and the runner:
 
-    /volume1/docker/ctrlvee-vlc-test/media
+    mkdir -p /volume1/docker/ctrlvee-vlc-test/media
 
-Create it in DSM File Station or over SSH. Give the dedicated GitHub runner account write access and allow the VLC container to read files. Do not point this directory at the production media library.
+Give the dedicated GitHub runner account write access and allow the VLC container to read files. Do not point this directory at the production media library.
 
 ## 3. Deploy the test VLC container
 
-Clone the repository to a stable Synology path, for example /volume1/docker/ctrlvee, and check out the reviewed main branch. The self-contained Compose deployment is in ctrlvee-vlc-test/. Copy its example environment file, set a unique long password and the dedicated host media directory, and keep the real .env file private:
+Clone the repository to a stable Synology path, for example /volume1/docker/ctrlvee, and check out the reviewed main branch. The self-contained Compose deployment is in ctrlvee-vlc-test/. The Compose file contains the image, ports, media mount, and hardening configuration. Only the VLC password is supplied through the local, uncommitted .env file:
 
     cd /volume1/docker/ctrlvee/ctrlvee-vlc-test
     cp .env.example .env
-    # Edit .env and set a unique VLC_TEST_PASSWORD and the media directory.
+    # Edit .env and set a unique VLC_TEST_PASSWORD.
     chmod 600 .env
-    docker compose -f docker-compose.yml config --quiet
-    docker compose -f docker-compose.yml up -d --build
+    docker compose config --quiet
+    docker compose up -d --build
 
 The container:
 - runs VLC as an unprivileged user;
 - has a read-only root filesystem and drops Linux capabilities;
-- mounts only the dedicated test media directory, read-only;
+- mounts only /volume1/docker/ctrlvee-vlc-test/media at /media, read-only;
 - has its HTTP interface bound to container port 8080;
 - publishes that port only as 127.0.0.1:18080 on the Synology host.
 
 Check it locally on the Synology (the source command loads VLC_TEST_PASSWORD from the local .env into your shell):
 
+    set -a
     . ./.env
+    set +a
     curl --fail --silent --show-error \
       --user ":$VLC_TEST_PASSWORD" \
       http://127.0.0.1:18080/requests/status.xml
@@ -53,7 +55,7 @@ The response should be VLC status XML. Do not test by opening port 18080 from th
 
 Use a dedicated, non-administrator DSM account for the runner. It needs:
 - access to the repository working directory;
-- write access to the dedicated test media directory;
+- write access to /volume1/docker/ctrlvee-vlc-test/media;
 - no access to production media or production VLC credentials;
 - no Docker socket or general container-management privileges.
 
@@ -81,19 +83,16 @@ The runner is persistent and can execute repository code from the trusted main b
 
 ## 5. Configure GitHub Actions
 
-In **Settings → Secrets and variables → Actions**, add:
-
-- Repository secret REMOTE_VLC_PASSWORD: the same password as VLC_TEST_PASSWORD.
-- Repository variable REMOTE_VLC_MEDIA_DIR: the exact host path mounted into the container, e.g. /volume1/docker/ctrlvee-vlc-test/media.
+Add repository secret **REMOTE_VLC_PASSWORD** with the same value as the local **VLC_TEST_PASSWORD**. No GitHub repository variable is needed for the media path: the runner and Compose deployment both use the fixed directory /volume1/docker/ctrlvee-vlc-test/media.
 
 The workflow assumes:
 - runner labels self-hosted, linux, x64, and vlc-lan;
 - test VLC at 127.0.0.1:18080;
-- the runner and VLC container share the same host media directory, with the container path /media.
+- the runner can write /volume1/docker/ctrlvee-vlc-test/media, which the container mounts at /media.
 
 ## 6. Run the remote integration test
 
-After the setup PR is merged and the runner is online, go to **Actions → Remote VLC integration → Run workflow** and dispatch it from main.
+After the runner is online, go to **Actions → Remote VLC integration → Run workflow** and dispatch it from main.
 
 The workflow is manually dispatched only, explicitly checks out main, and targets only the vlc-lan runner label. It does not run for pull requests, pushes, or fork code.
 
@@ -115,5 +114,5 @@ Keep QuickConnect and existing reverse-proxy services as they are. For private a
 - Runner offline: check the DSM boot task, runner process, outbound DNS/HTTPS, and GitHub runner status.
 - VLC status unavailable: check docker compose logs vlc-test, the container status, and the local curl command.
 - Authentication failure: ensure REMOTE_VLC_PASSWORD and local VLC_TEST_PASSWORD match.
-- Fixture not found: verify the runner can write the host media directory and the container mounts that exact directory at /media.
+- Fixture not found: verify the runner can write /volume1/docker/ctrlvee-vlc-test/media and the container mounts that exact directory at /media.
 - Workflow says no runner: confirm all four labels, especially vlc-lan, and that the runner is online.
