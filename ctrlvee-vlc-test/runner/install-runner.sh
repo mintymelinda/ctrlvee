@@ -45,29 +45,29 @@ command -v mktemp >/dev/null 2>&1 || fail "mktemp is required."
 # helpers private to this runner instead of modifying the DSM host.
 NEED_LOCAL_TOOLS=0
 if ! command -v ldd >/dev/null 2>&1; then
-    [ -r "\${SCRIPT_DIR}/ldd-compat.sh" ] || fail "DSM has no ldd command and the bundled ldd-compat.sh helper is missing."
+    [ -r "${SCRIPT_DIR}/ldd-compat.sh" ] || fail "DSM has no ldd command and the bundled ldd-compat.sh helper is missing."
     NEED_LOCAL_TOOLS=1
 fi
 if ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ]; then
-    [ -r "\${SCRIPT_DIR}/ldconfig-compat.sh" ] || fail "DSM has no ldconfig command and the bundled ldconfig-compat.sh helper is missing."
+    [ -r "${SCRIPT_DIR}/ldconfig-compat.sh" ] || fail "DSM has no ldconfig command and the bundled ldconfig-compat.sh helper is missing."
     NEED_LOCAL_TOOLS=1
 fi
 
 if [ "$NEED_LOCAL_TOOLS" -eq 1 ]; then
-    mkdir -p "\${RUNNER_DIR}/.local-tools"
+    mkdir -p "${RUNNER_DIR}/.local-tools"
 fi
 if ! command -v ldd >/dev/null 2>&1; then
-    cat "\${SCRIPT_DIR}/ldd-compat.sh" > "\${RUNNER_DIR}/.local-tools/ldd"
-    chmod 700 "\${RUNNER_DIR}/.local-tools/ldd"
+    cat "${SCRIPT_DIR}/ldd-compat.sh" > "${RUNNER_DIR}/.local-tools/ldd"
+    chmod 700 "${RUNNER_DIR}/.local-tools/ldd"
     printf '%s\n' "DSM has no system ldd; using the runner-local glibc dynamic-loader compatibility helper."
 fi
 if ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ]; then
-    cat "\${SCRIPT_DIR}/ldconfig-compat.sh" > "\${RUNNER_DIR}/.local-tools/ldconfig"
-    chmod 700 "\${RUNNER_DIR}/.local-tools/ldconfig"
+    cat "${SCRIPT_DIR}/ldconfig-compat.sh" > "${RUNNER_DIR}/.local-tools/ldconfig"
+    chmod 700 "${RUNNER_DIR}/.local-tools/ldconfig"
     printf '%s\n' "DSM has no system ldconfig; using a runner-local, read-only ICU discovery helper."
 fi
-if [ -d "\${RUNNER_DIR}/.local-tools" ]; then
-    PATH="\${RUNNER_DIR}/.local-tools:\${PATH}"
+if [ -d "${RUNNER_DIR}/.local-tools" ]; then
+    PATH="${RUNNER_DIR}/.local-tools:${PATH}"
     export PATH
 fi
 command -v ldd >/dev/null 2>&1 || fail "Could not provide ldd for GitHub runner configuration."
