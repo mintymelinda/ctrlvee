@@ -5,8 +5,10 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 RUNNER_DIR="${SCRIPT_DIR}/actions-runner"
-# Prefer the runner-local DSM compatibility helper when no system ldd exists.
-if ! command -v ldd >/dev/null 2>&1 && [ -x "$RUNNER_DIR/.local-tools/ldd" ]; then
+# Prefer runner-local DSM compatibility helpers when the host lacks either
+# command required by the official runner config.sh.
+if { ! command -v ldd >/dev/null 2>&1 && [ -x "$RUNNER_DIR/.local-tools/ldd" ]; } ||
+   { ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ] && [ -x "$RUNNER_DIR/.local-tools/ldconfig" ]; }; then
     PATH="$RUNNER_DIR/.local-tools:$PATH"
     export PATH
 fi
@@ -82,7 +84,7 @@ done
 
 section "System commands"
 # Required by the bootstrapper, installer, runner configuration and diagnostics.
-for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp mkdir cat chmod; do
+for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp mkdir cat chmod rm dirname pwd readlink; do
     check_command "$command_name" required
 done
 if command -v ldd >/dev/null 2>&1; then
@@ -92,8 +94,15 @@ elif [ -x /lib/ld-linux-x86-64.so.2 ] || [ -x /lib64/ld-linux-x86-64.so.2 ] || [
 else
     fail "Neither ldd nor a compatible x86_64 glibc dynamic loader was found."
 fi
-# Used by setup-runner.sh and helpful for host inspection.
-for command_name in su chown openssl synouser synoacltool readelf getconf; do
+if command -v ldconfig >/dev/null 2>&1; then
+    ok "ldconfig: $(command -v ldconfig)"
+elif [ -x /sbin/ldconfig ]; then
+    ok "ldconfig: /sbin/ldconfig"
+else
+    fail "ldconfig is unavailable and the runner-local compatibility helper is missing."
+fi
+# Required by setup-runner.sh.
+for command_name in su chown openssl; do
     check_command "$command_name" optional
 done
 
