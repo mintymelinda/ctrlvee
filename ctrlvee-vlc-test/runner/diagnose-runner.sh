@@ -98,11 +98,13 @@ if command -v ldconfig >/dev/null 2>&1; then
     ok "ldconfig: $(command -v ldconfig)"
 elif [ -x /sbin/ldconfig ]; then
     ok "ldconfig: /sbin/ldconfig"
+elif [ -r "$SCRIPT_DIR/ldconfig-compat.sh" ]; then
+    warn "System ldconfig is absent; the installer can provision the runner-local read-only ICU discovery helper."
 else
-    fail "ldconfig is unavailable and the runner-local compatibility helper is missing."
+    fail "ldconfig is unavailable and no compatible helper is available."
 fi
 # Required by setup-runner.sh.
-for command_name in su chown openssl; do
+for command_name in su chown openssl synouser synoacltool; do
     check_command "$command_name" optional
 done
 
