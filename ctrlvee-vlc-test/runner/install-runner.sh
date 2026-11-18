@@ -43,7 +43,7 @@ if ! command -v ldd >/dev/null 2>&1; then
     chmod 700 "${RUNNER_DIR}/.local-tools/ldd"
     PATH="${RUNNER_DIR}/.local-tools:${PATH}"
     export PATH
-    printf '%s\\n' "DSM has no system ldd; using the runner-local glibc dynamic-loader compatibility helper."
+    printf '%s\n' "DSM has no system ldd; using the runner-local glibc dynamic-loader compatibility helper."
 fi
 command -v ldd >/dev/null 2>&1 || fail "Could not provide ldd for GitHub runner configuration."
 
