@@ -55,32 +55,17 @@ The response should be VLC status XML. Do not test by opening port 18080 from th
 
 ## 4. Install the self-hosted runner on the Synology
 
-Use a dedicated, non-administrator DSM account for the runner. It needs:
-- access to the repository working directory;
-- read/traverse access to /volume1/docker/ctrlvee-vlc-test/media;
-- media files readable by the VLC container's UID 10001;
-- no access to production media or production VLC credentials;
-- no Docker socket or general container-management privileges.
+The repository includes an account bootstrapper, runner installer, and startup script under `ctrlvee-vlc-test/runner/`. From the repository checkout, run this from an interactive SSH session:
 
-In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, select **Linux / x64**, and follow GitHub's current download and extraction commands. GitHub generates a short-lived registration token; do not store it in the repository or a committed file.
+    sudo sh ctrlvee-vlc-test/runner/setup-runner.sh
 
-From the extracted runner directory, configure it with the generated token:
+The bootstrapper uses DSM's `synouser` to create the dedicated non-administrator account `ctrlvee-runner` with a generated, unguessable password that is never displayed or saved. It uses `synoacltool` to grant traversal-only access to parent directories, read/traverse access to the runner scripts, and read-only access to the fixed test media directory. It checks that the runner cannot list parent directories, write to the media directory, or read the local VLC `.env` password file. It then drops privileges and runs the installer as `ctrlvee-runner`.
 
-    ./config.sh \
-      --url https://github.com/mintymelinda/ctrlvee \
-      --token <SHORT_LIVED_REGISTRATION_TOKEN> \
-      --name synology-vlc-lan \
-      --labels vlc-lan \
-      --work _work \
-      --unattended
+The installer downloads the official GitHub Actions runner v2.338.2 release for Linux x64, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token. It configures the runner as `synology-vlc-lan` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels automatically. The token is not saved.
 
-The standard self-hosted, Linux, and X64 labels are added automatically; vlc-lan is the additional routing label used by the workflow.
+For persistence across DSM restarts, create a DSM **Task Scheduler → Triggered Task → User-defined script** task running as `ctrlvee-runner`, triggered at boot, with the absolute path to `ctrlvee-vlc-test/runner/run-runner.sh`. Keep the runner in the foreground, ensure only one runner process is started, and do not expose the runner listener or install it on a public-facing host.
 
-Run the runner as the dedicated account, not root:
-
-    ./run.sh
-
-For persistence across DSM restarts, create a DSM **Task Scheduler → Triggered Task → User-defined script** task that starts the runner at boot as that same account. Set the working directory to the runner installation directory before invoking ./run.sh. Ensure only one runner process is started. Do not expose the runner listener or install it on a public-facing host.
+The runner is installed under `ctrlvee-vlc-test/runner/actions-runner/`, which is ignored by Git. It does not mount or access the Docker socket.
 
 The runner is persistent and can execute repository code from the trusted main branch. Keep write access to main restricted and do not add this runner to pull-request workflows or workflows that execute fork/untrusted code.
 

@@ -1,2 +1,4 @@
 .env
 media/
+runner/actions-runner/
+runner/.runner-download.*
