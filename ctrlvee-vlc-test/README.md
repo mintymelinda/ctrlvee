@@ -1,6 +1,6 @@
 # CtrlVee VLC test instance
 
-This folder manages the dedicated, headless VLC instance used by the optional LAN integration tests. It is separate from production VLC/Plex. The Compose file uses format 3.7 and is compatible with both legacy `docker-compose` (Compose V1) and `docker-compose` (Compose V2). It intentionally omits the top-level `name` property, which Compose V1 rejects.
+This folder manages the dedicated, headless VLC instance used by the optional LAN integration tests. It is separate from production VLC/Plex. The Compose file uses format 3.7 and is compatible with both legacy `docker-compose` (Compose V1) and `docker compose` (Compose V2). It intentionally omits the top-level `name` property, which Compose V1 rejects.
 
 ## First-time setup
 
