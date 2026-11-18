@@ -62,25 +62,20 @@ Use a dedicated, non-administrator DSM account for the runner. It needs:
 - no access to production media or production VLC credentials;
 - no Docker socket or general container-management privileges.
 
-In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, select **Linux / x64**, and follow GitHub's current download and extraction commands. GitHub generates a short-lived registration token; do not store it in the repository or a committed file.
+The repository now includes a repeatable installer and startup script under `ctrlvee-vlc-test/runner/`. From the repository checkout, run:
 
-From the extracted runner directory, configure it with the generated token:
+    chmod +x ctrlvee-vlc-test/runner/*.sh
+    ./ctrlvee-vlc-test/runner/install-runner.sh
 
-    ./config.sh \
-      --url https://github.com/mintymelinda/ctrlvee \
-      --token <SHORT_LIVED_REGISTRATION_TOKEN> \
-      --name synology-vlc-lan \
-      --labels vlc-lan \
-      --work _work \
-      --unattended
+The installer downloads the official GitHub runner release for Linux x64, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token. It configures the runner as `synology-vlc-lan` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels automatically. The token is not saved.
 
-The standard self-hosted, Linux, and X64 labels are added automatically; vlc-lan is the additional routing label used by the workflow.
+Start it as the dedicated account, not root:
 
-Run the runner as the dedicated account, not root:
+    ./ctrlvee-vlc-test/runner/run-runner.sh
 
-    ./run.sh
+For persistence across DSM restarts, create a DSM **Task Scheduler → Triggered Task → User-defined script** task that runs the absolute path to `ctrlvee-vlc-test/runner/run-runner.sh` at boot as that same account. Keep the runner in the foreground, ensure only one runner process is started, and do not expose the runner listener or install it on a public-facing host.
 
-For persistence across DSM restarts, create a DSM **Task Scheduler → Triggered Task → User-defined script** task that starts the runner at boot as that same account. Set the working directory to the runner installation directory before invoking ./run.sh. Ensure only one runner process is started. Do not expose the runner listener or install it on a public-facing host.
+The runner is installed under `ctrlvee-vlc-test/runner/actions-runner/`, which is ignored by Git. It does not mount or access the Docker socket.
 
 The runner is persistent and can execute repository code from the trusted main branch. Keep write access to main restricted and do not add this runner to pull-request workflows or workflows that execute fork/untrusted code.
 
