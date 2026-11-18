@@ -17,7 +17,8 @@ fail() {
 [ "$(uname -m)" = "x86_64" ] || fail "This runner package targets x86_64; detected $(uname -m)."
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
-command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."\ncommand -v stty >/dev/null 2>&1 || fail "stty is required."
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
+command -v stty >/dev/null 2>&1 || fail "stty is required."
 
 if [ -e "${RUNNER_DIR}/.runner" ]; then
     fail "A runner is already configured in ${RUNNER_DIR}. Remove it from GitHub and configure it again only if you intend to replace that runner."
@@ -31,7 +32,7 @@ printf '%s\n' "  Repository Settings > Actions > Runners > New self-hosted runne
 printf '%s\n' "Paste that token below. It is used once and is not saved."
 printf '\n'
 
- [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
+[ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 printf 'GitHub runner registration token: '
 stty -echo
 trap 'stty echo 2>/dev/null || true' EXIT HUP INT TERM
@@ -46,7 +47,12 @@ printf '\n'
 
 mkdir -p "$RUNNER_DIR"
 TMP_ARCHIVE=$(mktemp "${SCRIPT_DIR}/.runner-download.XXXXXX")
-trap 'rm -f "$TMP_ARCHIVE"; unset RUNNER_TOKEN' EXIT HUP INT TERM
+trap 'rm -f "$TMP_ARCHIVE"
+
+if command -v ldd >/dev/null 2>&1; then
+    MISSING_LIBRARIES=$(ldd "$RUNNER_DIR/bin/Runner.Listener" 2>/dev/null | grep "not found" || true)
+    [ -z "$MISSING_LIBRARIES" ] || fail "The Synology host is missing runner libraries:\n$MISSING_LIBRARIES"
+fi; unset RUNNER_TOKEN' EXIT HUP INT TERM
 
 printf 'Downloading official runner v%s...\n' "$RUNNER_VERSION"
 curl --fail --location --silent --show-error --retry 3 \
