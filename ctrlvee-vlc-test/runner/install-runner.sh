@@ -2,8 +2,8 @@
 set -eu
 
 REPOSITORY_URL="https://github.com/mintymelinda/ctrlvee"
-RUNNER_VERSION="2.338.1"
-RUNNER_SHA256="08e9ccb3604d2462c24b5e33604dc30810296ca15cc65f23cffd4317eb144c37"
+RUNNER_VERSION="2.338.2"
+RUNNER_SHA256="baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40"
 RUNNER_ARCHIVE="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 RUNNER_DIR="${SCRIPT_DIR}/actions-runner"
@@ -31,14 +31,15 @@ printf '%s\n' "  Repository Settings > Actions > Runners > New self-hosted runne
 printf '%s\n' "Paste that token below. It is used once and is not saved."
 printf '\n'
 
+ [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 printf 'GitHub runner registration token: '
 stty -echo
+trap 'stty echo 2>/dev/null || true' EXIT HUP INT TERM
 if ! IFS= read -r RUNNER_TOKEN; then
-    stty echo
-    printf '\n'
     fail "Could not read registration token."
 fi
 stty echo
+trap - EXIT HUP INT TERM
 printf '\n'
 
 [ -n "$RUNNER_TOKEN" ] || fail "Registration token cannot be empty."
