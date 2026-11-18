@@ -14,7 +14,7 @@ Run these steps as a dedicated, non-administrator DSM account. Do not run the ru
    ./ctrlvee-vlc-test/runner/install-runner.sh
    ```
 
-3. Paste the short-lived registration token when prompted. The installer downloads the official runner release, verifies its SHA-256 checksum, and configures the runner with the `vlc-lan` label. The token is not written to disk or shell history.
+3. Paste the short-lived registration token when prompted. The installer downloads the official runner v2.338.2 release, verifies its pinned SHA-256 checksum, and configures the runner with the `vlc-lan` label. The token is not written to disk or shell history.
 4. Start the runner:
 
    ```sh
