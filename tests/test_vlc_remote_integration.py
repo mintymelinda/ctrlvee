@@ -9,13 +9,22 @@ from src.services.vlc_controller import VLCController
 
 
 SUPPORTED_MEDIA_EXTENSIONS = {
+    ".3gp",
     ".aac",
+    ".ac3",
+    ".aiff",
+    ".ape",
     ".avi",
     ".flac",
+    ".flv",
     ".m4a",
     ".m4v",
+    ".m2ts",
+    ".m2v",
+    ".mka",
     ".mkv",
     ".mov",
+    ".mp2",
     ".mp3",
     ".mp4",
     ".mpeg",
@@ -23,6 +32,7 @@ SUPPORTED_MEDIA_EXTENSIONS = {
     ".ogg",
     ".opus",
     ".ts",
+    ".mts",
     ".wav",
     ".webm",
     ".wma",
@@ -144,7 +154,7 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
                 f"VLC to resume {fixture_name!r}",
             )
 
-            duration = int(status.findtext("length", "0"))
+            duration = int(status.findtext("length") or "0")
             if duration >= 35:
                 seek_seconds = min(30, duration - 5)
                 self.controller.seek(seek_seconds)
