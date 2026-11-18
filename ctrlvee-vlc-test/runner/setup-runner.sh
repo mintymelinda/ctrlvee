@@ -91,7 +91,7 @@ find "$MEDIA_DIR" -type f -exec sh -c '
     user=$2
     shift 2
     for path do
-        current=$("$tool" -get "$path" 2>/dev/null) || exit 1
+        current=$("$tool" -get "$path" 2>/dev/null || true)
         case "$current" in
             *"user:$user:allow:"*) ;;
             *) "$tool" -add "$path" "user:$user:allow:r-----------:----" >/dev/null || exit 1 ;;
