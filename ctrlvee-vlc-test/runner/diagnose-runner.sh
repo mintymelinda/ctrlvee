@@ -5,6 +5,11 @@ set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd)
 RUNNER_DIR="${SCRIPT_DIR}/actions-runner"
+# Prefer the runner-local DSM compatibility helper when no system ldd exists.
+if ! command -v ldd >/dev/null 2>&1 && [ -x "$RUNNER_DIR/.local-tools/ldd" ]; then
+    PATH="$RUNNER_DIR/.local-tools:$PATH"
+    export PATH
+fi
 FAILURES=0
 WARNINGS=0
 
@@ -77,12 +82,16 @@ done
 
 section "System commands"
 # Required by the bootstrapper, installer, runner configuration and diagnostics.
-for command_name in sh bash curl tar gzip sha256sum stty ldd git awk sed grep find id uname mktemp; do
-    case "$command_name" in
-        ldd|bash|curl|tar|gzip|sha256sum|stty) check_command "$command_name" required ;;
-        *) check_command "$command_name" required ;;
-    esac
+for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp mkdir cat chmod; do
+    check_command "$command_name" required
 done
+if command -v ldd >/dev/null 2>&1; then
+    ok "ldd: $(command -v ldd)"
+elif [ -x /lib/ld-linux-x86-64.so.2 ] || [ -x /lib64/ld-linux-x86-64.so.2 ] || [ -x /usr/lib/ld-linux-x86-64.so.2 ]; then
+    warn "System ldd is absent; the installer can provide a runner-local compatibility helper using the available glibc dynamic loader."
+else
+    fail "Neither ldd nor a compatible x86_64 glibc dynamic loader was found."
+fi
 # Used by setup-runner.sh and helpful for host inspection.
 for command_name in su chown openssl synouser synoacltool readelf getconf; do
     check_command "$command_name" optional
@@ -99,8 +108,10 @@ fi
 if command -v ldd >/dev/null 2>&1; then
     ldd_version=$(ldd --version 2>&1 | sed -n '1p')
     printf 'ldd version: %s\n' "$ldd_version"
+elif [ -x /lib/ld-linux-x86-64.so.2 ] || [ -x /lib64/ld-linux-x86-64.so.2 ] || [ -x /usr/lib/ld-linux-x86-64.so.2 ]; then
+    warn "System ldd is absent. The installer will provision a private compatibility helper inside actions-runner."
 else
-    fail "ldd is missing. GitHub runner config.sh requires ldd; this is the immediate blocker reported by the installer."
+    fail "ldd is missing and no compatible x86_64 glibc dynamic loader was found."
 fi
 
 section "Runner files and permissions"
