@@ -106,14 +106,7 @@ find "$MEDIA_DIR" \
         for path do
             while :; do
                 current=$("$tool" -get "$path" 2>/dev/null || true)
-                index=$(printf "%s\n" "$current" | awk -v entry="user:$user:" '
-                    index($0, entry) && index($0, "(level:0)") {
-                        token=$1
-                        gsub(/[^0-9]/, "", token)
-                        print token
-                        exit
-                    }
-                ')
+                index=$(printf "%s\n" "$current" | sed -n "/user:$user:.*(level:0)/s/^[[:space:]]*\[\([0-9][0-9]*\)\].*/\1/p" | head -n 1)
                 [ -n "$index" ] || break
                 "$tool" -del "$path" "$index" >/dev/null || exit 1
             done
@@ -132,14 +125,7 @@ find "$MEDIA_DIR" \
         for path do
             while :; do
                 current=$("$tool" -get "$path" 2>/dev/null || true)
-                index=$(printf "%s\n" "$current" | awk -v entry="user:$user:" '
-                    index($0, entry) && index($0, "(level:0)") {
-                        token=$1
-                        gsub(/[^0-9]/, "", token)
-                        print token
-                        exit
-                    }
-                ')
+                index=$(printf "%s\n" "$current" | sed -n "/user:$user:.*(level:0)/s/^[[:space:]]*\[\([0-9][0-9]*\)\].*/\1/p" | head -n 1)
                 [ -n "$index" ] || break
                 "$tool" -del "$path" "$index" >/dev/null || exit 1
             done
