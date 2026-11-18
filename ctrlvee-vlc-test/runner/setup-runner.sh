@@ -99,7 +99,7 @@ find "$MEDIA_DIR" \
             if printf "%s\n" "$current" | grep -F "user:$user:" | grep -Fq "(level:0)"; then
                 "$tool" -del "$path" "user:$user" >/dev/null || exit 1
             fi
-            "$tool" -add "$path" "user:$user:allow:r-x----------:fd--" >/dev/null || exit 1
+            "$tool" -add "$path" "user:$user:allow:r-x----------:----" >/dev/null || exit 1
         done
     ' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + \
     || fail "Could not configure read-only access to media directories."
