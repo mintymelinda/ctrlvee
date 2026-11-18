@@ -39,6 +39,11 @@ command -v pwd >/dev/null 2>&1 || fail "pwd is required by GitHub runner configu
 command -v rm >/dev/null 2>&1 || fail "rm is required."
 command -v mktemp >/dev/null 2>&1 || fail "mktemp is required."
 command -v touch >/dev/null 2>&1 || fail "touch is required by GitHub runner configuration."
+command -v id >/dev/null 2>&1 || fail "id is required by GitHub runner configuration."
+command -v uname >/dev/null 2>&1 || fail "uname is required by GitHub runner configuration."
+command -v mkdir >/dev/null 2>&1 || fail "mkdir is required."
+command -v cat >/dev/null 2>&1 || fail "cat is required."
+command -v chmod >/dev/null 2>&1 || fail "chmod is required."
 [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 
 # DSM may provide glibc and its dynamic loader without shipping ldd or
