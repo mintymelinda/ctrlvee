@@ -56,7 +56,6 @@ jobs:
       - name: Validate private remote VLC Compose configuration
         env:
           VLC_TEST_PASSWORD: ci-only-test-password
-          VLC_TEST_MEDIA_DIR: /tmp/ctrlvee-vlc-test-media
         run: docker compose --file ctrlvee-vlc-test/docker-compose.yml config --quiet
 
       - name: Smoke-test application imports in the built image
