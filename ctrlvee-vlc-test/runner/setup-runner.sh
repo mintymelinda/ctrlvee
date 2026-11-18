@@ -109,7 +109,7 @@ chown -R "$RUNNER_USER" "$RUNNER_DIR"
 chmod 700 "$RUNNER_DIR"
 
 run_as_runner() {
-    su -s /bin/sh "$RUNNER_USER" -c "$1"
+    su -s /bin/sh -c "$1" "$RUNNER_USER"
 }
 
 # Fail closed if the account can browse parent directories or read the VLC
@@ -127,6 +127,10 @@ run_as_runner "test -r '$SCRIPT_DIR/install-runner.sh' && test -x '$SCRIPT_DIR' 
     || fail "Runner account cannot read the installer or write its private runner directory."
 run_as_runner "test -r '$MEDIA_DIR' && test -x '$MEDIA_DIR' && ! test -w '$MEDIA_DIR'" \
     || fail "Runner account does not have strictly read-only access to the media directory."
+if [ -S /var/run/docker.sock ]; then
+    run_as_runner "test ! -r /var/run/docker.sock && test ! -w /var/run/docker.sock" \
+        || fail "Runner account can access the Docker socket; remove that permission before continuing."
+fi
 if [ -f "$VLC_ENV" ]; then
     run_as_runner "test ! -r '$VLC_ENV'" \
         || fail "Runner account can read $VLC_ENV. Restrict that file before continuing."
