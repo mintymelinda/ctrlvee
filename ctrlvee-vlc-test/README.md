@@ -1,6 +1,6 @@
 # CtrlVee VLC test instance
 
-This folder manages the dedicated, headless VLC instance used by the optional LAN integration tests. It is separate from production VLC/Plex.
+This folder manages the dedicated, headless VLC instance used by the optional LAN integration tests. It is separate from production VLC/Plex. The Compose file uses format 3.7 and is compatible with both legacy `docker-compose` (Compose V1) and `docker compose` (Compose V2). It intentionally omits the top-level `name` property, which Compose V1 rejects.
 
 ## First-time setup
 
@@ -19,8 +19,8 @@ This folder manages the dedicated, headless VLC instance used by the optional LA
 
 3. Validate and start the service:
 
-       docker compose config --quiet
-       docker compose up -d --build
+       docker-compose config --quiet
+       docker-compose up -d --build
 
 The VLC HTTP control interface is published only on `127.0.0.1:18080` on the Synology host. Do not expose this port through QuickConnect, a reverse proxy, Tailscale Funnel, or router port forwarding.
 
@@ -32,16 +32,16 @@ Run these commands from this directory:
 
 | Action | Command |
 | --- | --- |
-| Start | `docker compose up -d` |
-| Rebuild and start | `docker compose up -d --build` |
-| Status | `docker compose ps` |
-| Follow logs | `docker compose logs -f vlc-test` |
-| Stop | `docker compose stop` |
-| Start after stopping | `docker compose start` |
-| Restart | `docker compose restart` |
-| Stop and remove container/network | `docker compose down` |
+| Start | `docker-compose up -d` |
+| Rebuild and start | `docker-compose up -d --build` |
+| Status | `docker-compose ps` |
+| Follow logs | `docker-compose logs -f vlc-test` |
+| Stop | `docker-compose stop` |
+| Start after stopping | `docker-compose start` |
+| Restart | `docker-compose restart` |
+| Stop and remove container/network | `docker-compose down` |
 
-`docker compose down` does not delete the host media directory or the local `.env` file.
+`docker-compose down` does not delete the host media directory or the local `.env` file.
 
 ## Verify the endpoint locally
 

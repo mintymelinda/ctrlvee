@@ -1,6 +1,6 @@
 # Private Synology VLC integration environment
 
-This deployment adds a **dedicated test VLC instance** and a **repository-scoped GitHub Actions runner** on the Synology. It must not point at the production Plex/VLC endpoint.
+This deployment adds a **dedicated test VLC instance** and a **repository-scoped GitHub Actions runner** on the Synology. It must not point at the production Plex/VLC endpoint. The Compose file uses format 3.7 and supports both legacy `docker-compose` (Compose V1) and `docker compose` (Compose V2); the top-level `name` property is deliberately omitted because Compose V1 rejects it.
 
 The VLC HTTP interface is published only on the Synology loopback address (127.0.0.1:18080). The native runner reaches it locally. Do not add a reverse-proxy route, router port-forward, or public DNS record for this port.
 
@@ -30,8 +30,8 @@ Clone the repository to a stable Synology path, for example /volume1/docker/ctrl
     cp .env.example .env
     # Edit .env and set a unique VLC_TEST_PASSWORD.
     chmod 600 .env
-    docker compose config --quiet
-    docker compose up -d --build
+    docker-compose config --quiet
+    docker-compose up -d --build
 
 The container:
 - runs VLC as an unprivileged user;
@@ -112,7 +112,7 @@ Keep QuickConnect and existing reverse-proxy services as they are. For private a
 ## Troubleshooting
 
 - Runner offline: check the DSM boot task, runner process, outbound DNS/HTTPS, and GitHub runner status.
-- VLC status unavailable: check docker compose logs vlc-test, the container status, and the local curl command.
+- VLC status unavailable: check docker-compose logs vlc-test, the container status, and the local curl command.
 - Authentication failure: ensure REMOTE_VLC_PASSWORD and local VLC_TEST_PASSWORD match.
 - Fixture not found: verify the runner can write /volume1/docker/ctrlvee-vlc-test/media and the container mounts that exact directory at /media.
 - Workflow says no runner: confirm all four labels, especially vlc-lan, and that the runner is online.

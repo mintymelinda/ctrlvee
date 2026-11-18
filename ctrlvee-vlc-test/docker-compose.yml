@@ -1,4 +1,4 @@
-name: ctrlvee-vlc-test
+version: "3.7"
 
 services:
   vlc-test:

@@ -58,6 +58,15 @@ jobs:
           VLC_TEST_PASSWORD: ci-only-test-password
         run: docker compose --file ctrlvee-vlc-test/docker-compose.yml config --quiet
 
+      - name: Validate private remote VLC configuration with legacy Compose V1
+        run: |
+          docker run --rm \
+            --volume "$PWD:/work:ro" \
+            --workdir /work \
+            --env VLC_TEST_PASSWORD=ci-only-test-password \
+            docker/compose:1.29.2 \
+            --file ctrlvee-vlc-test/docker-compose.yml config --quiet
+
       - name: Smoke-test application imports in the built image
         run: |
           docker run --rm --entrypoint python ctrlvee:ci -c "
