@@ -57,7 +57,8 @@ The response should be VLC status XML. Do not test by opening port 18080 from th
 
 Use a dedicated, non-administrator DSM account for the runner. It needs:
 - access to the repository working directory;
-- read/traverse access to /volume1/docker/ctrlvee-vlc-test/media;\n- media files readable by the VLC container's UID 10001;
+- read/traverse access to /volume1/docker/ctrlvee-vlc-test/media;
+- media files readable by the VLC container's UID 10001;
 - no access to production media or production VLC credentials;
 - no Docker socket or general container-management privileges.
 
