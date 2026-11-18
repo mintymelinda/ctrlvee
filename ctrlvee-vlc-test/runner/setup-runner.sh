@@ -49,7 +49,7 @@ fi
 ensure_acl() {
     path=$1
     entry=$2
-    current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null) || fail "Could not inspect ACL on $path."
+    current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null || true)
     case "$current" in
         *"$entry"*) ;;
         *) "$SYNOACLTOOL" -add "$path" "$entry" >/dev/null || fail "Could not apply runner ACL to $path." ;;
@@ -78,7 +78,7 @@ find "$MEDIA_DIR" -type d -exec sh -c '
     user=$2
     shift 2
     for path do
-        current=$("$tool" -get "$path" 2>/dev/null) || exit 1
+        current=$("$tool" -get "$path" 2>/dev/null || true)
         case "$current" in
             *"user:$user:allow:"*) ;;
             *) "$tool" -add "$path" "user:$user:allow:r-x----------:fd--" >/dev/null || exit 1 ;;
