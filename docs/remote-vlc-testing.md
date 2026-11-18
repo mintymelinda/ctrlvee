@@ -20,7 +20,9 @@ Create the fixed host directory used by both Compose and the runner:
 
     mkdir -p /volume1/docker/ctrlvee-vlc-test/media
 
-Give the dedicated GitHub runner account write access and allow the VLC container to read files. Do not point this directory at the production media library.
+Place one or more representative audio/video files in this directory (subdirectories are supported). The integration test discovers all supported files automatically. The runner account needs read/traverse access; it does not need write access. Files and directories must also be readable/traversable by the VLC container's unprivileged UID 10001. The VLC container mounts this directory read-only.
+
+Do not point this directory at the production media library.
 
 ## 3. Deploy the test VLC container
 
@@ -55,7 +57,8 @@ The response should be VLC status XML. Do not test by opening port 18080 from th
 
 Use a dedicated, non-administrator DSM account for the runner. It needs:
 - access to the repository working directory;
-- write access to /volume1/docker/ctrlvee-vlc-test/media;
+- read/traverse access to /volume1/docker/ctrlvee-vlc-test/media;
+- media files readable by the VLC container's UID 10001;
 - no access to production media or production VLC credentials;
 - no Docker socket or general container-management privileges.
 
@@ -88,22 +91,22 @@ Add repository secret **REMOTE_VLC_PASSWORD** with the same value as the local *
 The workflow assumes:
 - runner labels self-hosted, linux, x64, and vlc-lan;
 - test VLC at 127.0.0.1:18080;
-- the runner can write /volume1/docker/ctrlvee-vlc-test/media, which the container mounts at /media.
+- the runner can read /volume1/docker/ctrlvee-vlc-test/media, which the container mounts at /media.
 
 ## 6. Run the remote integration test
 
-After the runner is online, go to **Actions → Remote VLC integration → Run workflow** and dispatch it from main.
+After the runner is online and media files are present, go to **Actions → Remote VLC integration → Run workflow** and dispatch it from main.
 
 The workflow is manually dispatched only, explicitly checks out main, and targets only the vlc-lan runner label. It does not run for pull requests, pushes, or fork code.
 
 The remote test:
 1. verifies status and playlist access;
-2. creates a uniquely named WAV fixture in the dedicated host media directory;
-3. asks VLC to enqueue and play that fixture;
-4. verifies pause, resume, seek, and stop against the test item's playlist ID;
-5. removes only the playlist item created by that test and deletes its fixture.
+2. discovers all supported audio/video files in the dedicated media directory (including subdirectories);
+3. asks VLC to enqueue and play each selected file;
+4. verifies pause, resume, and stop for every selected file, and seek when the file is at least 35 seconds long;
+5. removes only the playlist items created by that test.
 
-It never clears the playlist and never removes pre-existing playlist entries. Keep this VLC instance dedicated to CtrlVee integration tests anyway; do not use it for normal playback.
+It never writes to, renames, or deletes the media files. It never clears the playlist or removes pre-existing playlist entries. Keep this VLC instance dedicated to CtrlVee integration tests; do not use it for normal playback.
 
 ## 7. Remote administration
 
@@ -114,5 +117,5 @@ Keep QuickConnect and existing reverse-proxy services as they are. For private a
 - Runner offline: check the DSM boot task, runner process, outbound DNS/HTTPS, and GitHub runner status.
 - VLC status unavailable: check docker-compose logs vlc-test, the container status, and the local curl command.
 - Authentication failure: ensure REMOTE_VLC_PASSWORD and local VLC_TEST_PASSWORD match.
-- Fixture not found: verify the runner can write /volume1/docker/ctrlvee-vlc-test/media and the container mounts that exact directory at /media.
+- No media fixtures found: confirm the directory contains at least one non-empty supported media file and that the runner account can read it.
 - Workflow says no runner: confirm all four labels, especially vlc-lan, and that the runner is online.
