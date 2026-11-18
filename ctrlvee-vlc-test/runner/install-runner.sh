@@ -24,16 +24,29 @@ cleanup() {
 
 [ "$(id -u)" -ne 0 ] || fail "Run this installer as the dedicated, non-root DSM runner account."
 [ "$(uname -m)" = "x86_64" ] || fail "This runner package targets x86_64; detected $(uname -m)."
+if [ -e "${RUNNER_DIR}/.runner" ]; then
+    fail "A runner is already configured in ${RUNNER_DIR}. Remove it from GitHub and configure it again only if you intend to replace that runner."
+fi
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 command -v stty >/dev/null 2>&1 || fail "stty is required."
-command -v ldd >/dev/null 2>&1 || fail "ldd is required by GitHub runner configuration. Run sh \"$SCRIPT_DIR/diagnose-runner.sh\" as ctrlvee-runner and resolve the reported dependencies before retrying."
 [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 
-if [ -e "${RUNNER_DIR}/.runner" ]; then
-    fail "A runner is already configured in ${RUNNER_DIR}. Remove it from GitHub and configure it again only if you intend to replace that runner."
+# DSM may provide glibc and its dynamic loader without shipping ldd. GitHub's
+# config.sh requires the command, so install a private compatibility wrapper
+# inside the runner-owned directory rather than modifying the DSM host.
+if ! command -v ldd >/dev/null 2>&1; then
+    [ -r "${SCRIPT_DIR}/ldd-compat.sh" ] || fail "DSM has no ldd command and the bundled ldd-compat.sh helper is missing."
+    mkdir -p "${RUNNER_DIR}/.local-tools"
+    cat "${SCRIPT_DIR}/ldd-compat.sh" > "${RUNNER_DIR}/.local-tools/ldd"
+    chmod 700 "${RUNNER_DIR}/.local-tools/ldd"
+    PATH="${RUNNER_DIR}/.local-tools:${PATH}"
+    export PATH
+    printf '%s\\n' "DSM has no system ldd; using the runner-local glibc dynamic-loader compatibility helper."
 fi
+command -v ldd >/dev/null 2>&1 || fail "Could not provide ldd for GitHub runner configuration."
+
 
 printf '%s\n' "This installs the official GitHub Actions runner v${RUNNER_VERSION} for:"
 printf '  %s\n' "$REPOSITORY_URL"
