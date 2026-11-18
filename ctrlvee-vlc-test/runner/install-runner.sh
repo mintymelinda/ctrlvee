@@ -17,7 +17,7 @@ fail() {
 [ "$(uname -m)" = "x86_64" ] || fail "This runner package targets x86_64; detected $(uname -m)."
 command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
-command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
+command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."\ncommand -v stty >/dev/null 2>&1 || fail "stty is required."
 
 if [ -e "${RUNNER_DIR}/.runner" ]; then
     fail "A runner is already configured in ${RUNNER_DIR}. Remove it from GitHub and configure it again only if you intend to replace that runner."
