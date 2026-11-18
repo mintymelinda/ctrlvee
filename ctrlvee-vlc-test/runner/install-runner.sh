@@ -28,6 +28,7 @@ command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 command -v stty >/dev/null 2>&1 || fail "stty is required."
+command -v ldd >/dev/null 2>&1 || fail "ldd is required by GitHub runner configuration. Run sh \"$SCRIPT_DIR/diagnose-runner.sh\" as ctrlvee-runner and resolve the reported dependencies before retrying."
 [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 
 if [ -e "${RUNNER_DIR}/.runner" ]; then
@@ -69,10 +70,8 @@ tar -xzf "$TMP_ARCHIVE" -C "$RUNNER_DIR"
 rm -f "$TMP_ARCHIVE"
 TMP_ARCHIVE=""
 
-if command -v ldd >/dev/null 2>&1; then
-    MISSING_LIBRARIES=$(ldd "$RUNNER_DIR/bin/Runner.Listener" 2>/dev/null | grep "not found" || true)
-    [ -z "$MISSING_LIBRARIES" ] || fail "The Synology host is missing runner libraries: $MISSING_LIBRARIES"
-fi
+MISSING_LIBRARIES=$(ldd "$RUNNER_DIR/bin/Runner.Listener" 2>/dev/null | grep "not found" || true)
+[ -z "$MISSING_LIBRARIES" ] || fail "The Synology host is missing runner libraries: $MISSING_LIBRARIES"
 
 cd "$RUNNER_DIR"
 ./config.sh \
