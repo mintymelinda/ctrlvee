@@ -14,6 +14,9 @@ fail() {
 
 [ "$(id -u)" -eq 0 ] || fail "Run this setup with sudo: sudo sh $0"
 [ "$(uname -m)" = "x86_64" ] || fail "This runner package targets x86_64; detected $(uname -m)."
+for command_name in id uname dirname mkdir chmod awk grep sed head ls; do
+    command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required by the DSM account and ACL setup."
+done
 [ -d "$MEDIA_DIR" ] || fail "Test media directory does not exist: $MEDIA_DIR"
 command -v openssl >/dev/null 2>&1 || fail "openssl is required to generate an unguessable, unused account password."
 command -v find >/dev/null 2>&1 || fail "find is required."
