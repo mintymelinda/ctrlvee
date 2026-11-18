@@ -15,8 +15,8 @@ services:
       # Keep the VLC control API local to the Synology host.
       - "127.0.0.1:18080:8080"
     volumes:
-      # The runner writes fixtures here; VLC reads them through /media.
-      - ${VLC_TEST_MEDIA_DIR:-./media}:/media:ro
+      # Fixed, dedicated host directory shared with the self-hosted runner.
+      - /volume1/docker/ctrlvee-vlc-test/media:/media:ro
     read_only: true
     tmpfs:
       - /tmp
