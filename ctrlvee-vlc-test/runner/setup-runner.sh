@@ -149,9 +149,9 @@ run_as_runner "test -r '$SCRIPT_DIR/install-runner.sh' && test -x '$SCRIPT_DIR' 
 run_as_runner "test -r '$MEDIA_DIR' && test -x '$MEDIA_DIR' && ! test -w '$MEDIA_DIR' && ls -A '$MEDIA_DIR' >/dev/null" \
     || fail "Runner account cannot list/read the media directory or can write to it."
 
-run_as_runner "find '$MEDIA_DIR' \\( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \\) -prune -o -type d -exec sh -c 'for path do test -x \"\\$path\" && test ! -w \"\\$path\" || exit 1; done' sh {} +" \
+run_as_runner "find '$MEDIA_DIR' \\( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \\) -prune -o -type d -exec sh -c 'for path do test -x \"\$path\" && test ! -w \"\$path\" || exit 1; done' sh {} +" \
     || fail "Runner account cannot traverse or can write to one or more media directories."
-run_as_runner "find '$MEDIA_DIR' \\( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \\) -prune -o -type f -exec sh -c 'for path do test -r \"\\$path\" && test ! -w \"\\$path\" || exit 1; done' sh {} +" \
+run_as_runner "find '$MEDIA_DIR' \\( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \\) -prune -o -type f -exec sh -c 'for path do test -r \"\$path\" && test ! -w \"\$path\" || exit 1; done' sh {} +" \
     || fail "Runner account cannot read every media file or can write to one or more media files."
 
 if [ -S /var/run/docker.sock ]; then
