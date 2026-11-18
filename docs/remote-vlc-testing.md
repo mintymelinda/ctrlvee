@@ -67,7 +67,7 @@ The repository now includes a repeatable installer and startup script under `ctr
     chmod +x ctrlvee-vlc-test/runner/*.sh
     ./ctrlvee-vlc-test/runner/install-runner.sh
 
-The installer downloads the official GitHub runner release for Linux x64, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token. It configures the runner as `synology-vlc-lan` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels automatically. The token is not saved.
+The installer downloads the official GitHub Actions runner v2.338.2 release for Linux x64, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token. It configures the runner as `synology-vlc-lan` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels automatically. The token is not saved.
 
 Start it as the dedicated account, not root:
 
