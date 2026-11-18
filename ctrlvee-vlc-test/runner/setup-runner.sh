@@ -4,7 +4,7 @@ set -eu
 RUNNER_USER="ctrlvee-runner"
 MEDIA_DIR="/volume1/docker/ctrlvee-vlc-test/media"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-RUNNER_DIR="${SCRIPT_DIR}/actions-runner"
+RUNNER_DIR="$SCRIPT_DIR/actions-runner"
 VLC_ENV="$(dirname "$MEDIA_DIR")/.env"
 
 fail() {
@@ -46,6 +46,18 @@ else
     printf 'Created dedicated DSM account: %s\n' "$RUNNER_USER"
 fi
 
+# Remove only this runner user's explicit ACEs. Old versions of this installer
+# added inherited DENY entries on parent folders; those DENYs also blocked
+# access to the media subtree. Inherited ACEs are not deleted by this command.
+remove_runner_acl() {
+    path=$1
+    current=$("$SYNOACLTOOL" -get "$path" 2>/dev/null || true)
+    if printf '%s\n' "$current" | grep -F "user:$RUNNER_USER:" | grep -Fq "(level:0)"; then
+        "$SYNOACLTOOL" -del "$path" "user:$RUNNER_USER" >/dev/null \
+            || fail "Could not remove the previous runner ACL entries from $path."
+    fi
+}
+
 ensure_acl() {
     path=$1
     entry=$2
@@ -56,48 +68,58 @@ ensure_acl() {
     esac
 }
 
-# Permit path traversal without allowing directory listings on parent folders.
+# Remove legacy runner ACEs from every parent in both paths. Do not install
+# DENY ACEs on ancestors: DSM inheritance can carry them into the media tree,
+# where they override the intended fixture-read permission.
 for start in "$SCRIPT_DIR" "$MEDIA_DIR"; do
     path=$(dirname "$start")
     while [ "$path" != "/" ]; do
         [ -d "$path" ] || fail "Expected parent directory is missing: $path"
-        ensure_acl "$path" "user:$RUNNER_USER:deny:r-----------:----"
-        ensure_acl "$path" "user:$RUNNER_USER:allow:--x----------:----"
+        remove_runner_acl "$path"
         path=$(dirname "$path")
     done
 done
 
-# The runner can list/traverse its scripts directory, but cannot change the
-# checked-out repository. Its ignored actions-runner directory is separate.
+# The runner needs to read its scripts. Its private actions-runner directory
+# is separate and is owned by the runner account.
+remove_runner_acl "$SCRIPT_DIR"
 ensure_acl "$SCRIPT_DIR" "user:$RUNNER_USER:allow:r-x----------:fd--"
 
-# Grant read-only access to fixture directories and files. The directory ACE
-# propagates to future fixtures added below this directory.
-find "$MEDIA_DIR" -type d -exec sh -c '
-    tool=$1
-    user=$2
-    shift 2
-    for path do
-        current=$("$tool" -get "$path" 2>/dev/null || true)
-        case "$current" in
-            *"user:$user:allow:"*) ;;
-            *) "$tool" -add "$path" "user:$user:allow:r-x----------:fd--" >/dev/null || exit 1 ;;
-        esac
-    done
-' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + || fail "Could not grant read/traverse access to media directories."
+# Synology creates @eaDir trees containing metadata/stream files. They are
+# not media fixtures and must not be granted to or included in runner checks.
+# Remove legacy ACEs and grant read/traverse only on real media directories.
+find "$MEDIA_DIR" \
+    \( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \) -prune -o \
+    -type d -exec sh -c '
+        tool=$1
+        user=$2
+        shift 2
+        for path do
+            current=$("$tool" -get "$path" 2>/dev/null || true)
+            if printf "%s\n" "$current" | grep -F "user:$user:" | grep -Fq "(level:0)"; then
+                "$tool" -del "$path" "user:$user" >/dev/null || exit 1
+            fi
+            "$tool" -add "$path" "user:$user:allow:r-x----------:fd--" >/dev/null || exit 1
+        done
+    ' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + \
+    || fail "Could not configure read-only access to media directories."
 
-find "$MEDIA_DIR" -type f -exec sh -c '
-    tool=$1
-    user=$2
-    shift 2
-    for path do
-        current=$("$tool" -get "$path" 2>/dev/null || true)
-        case "$current" in
-            *"user:$user:allow:"*) ;;
-            *) "$tool" -add "$path" "user:$user:allow:r-----------:----" >/dev/null || exit 1 ;;
-        esac
-    done
-' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + || fail "Could not grant read-only access to existing media files."
+# Grant read-only access to actual media files, excluding Synology metadata.
+find "$MEDIA_DIR" \
+    \( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \) -prune -o \
+    -type f -exec sh -c '
+        tool=$1
+        user=$2
+        shift 2
+        for path do
+            current=$("$tool" -get "$path" 2>/dev/null || true)
+            if printf "%s\n" "$current" | grep -F "user:$user:" | grep -Fq "(level:0)"; then
+                "$tool" -del "$path" "user:$user" >/dev/null || exit 1
+            fi
+            "$tool" -add "$path" "user:$user:allow:r-----------:----" >/dev/null || exit 1
+        done
+    ' sh "$SYNOACLTOOL" "$RUNNER_USER" {} + \
+    || fail "Could not configure read-only access to media files."
 
 # The local VLC password is not part of the runner's required inputs.
 if [ -f "$VLC_ENV" ]; then
@@ -109,28 +131,29 @@ chown -R "$RUNNER_USER" "$RUNNER_DIR"
 chmod 700 "$RUNNER_DIR"
 
 run_as_runner() {
-    su -s /bin/sh -c "$1" "$RUNNER_USER"
+    su -s /bin/sh -c "cd / && $1" "$RUNNER_USER"
 }
 
-# Fail closed if the account can browse parent directories or read the VLC
-# password. Check both directory access and read-only media access as the user.
+# Parent folders may be listable under the NAS's existing everyone ACL. The
+# runner only needs traversal; this check does not claim to hide their names.
 for start in "$SCRIPT_DIR" "$MEDIA_DIR"; do
     path=$(dirname "$start")
     while [ "$path" != "/" ]; do
-        run_as_runner "test ! -r '$path' && test -x '$path'" \
-            || fail "Runner account can list or cannot traverse $path; inspect its effective DSM ACLs."
+        run_as_runner "test -x '$path'" || fail "Runner account cannot traverse $path."
         path=$(dirname "$path")
     done
 done
 
 run_as_runner "test -r '$SCRIPT_DIR/install-runner.sh' && test -x '$SCRIPT_DIR' && test -w '$RUNNER_DIR'" \
     || fail "Runner account cannot read the installer or write its private runner directory."
-run_as_runner "test -r '$MEDIA_DIR' && test -x '$MEDIA_DIR' && ! test -w '$MEDIA_DIR'" \
-    || fail "Runner account does not have strictly read-only access to the media directory."
-run_as_runner "find '$MEDIA_DIR' -type d -exec sh -c 'for path do test ! -w \"\$path\" || exit 1; done' sh {} +" \
-    || fail "Runner account can write to one or more media directories."
-run_as_runner "find '$MEDIA_DIR' -type f -exec sh -c 'for path do test -r \"\$path\" && test ! -w \"\$path\" || exit 1; done' sh {} +" \
+run_as_runner "test -r '$MEDIA_DIR' && test -x '$MEDIA_DIR' && ! test -w '$MEDIA_DIR' && ls -A '$MEDIA_DIR' >/dev/null" \
+    || fail "Runner account cannot list/read the media directory or can write to it."
+
+run_as_runner "find '$MEDIA_DIR' \\( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \\) -prune -o -type d -exec sh -c 'for path do test -x \"\\$path\" && test ! -w \"\\$path\" || exit 1; done' sh {} +" \
+    || fail "Runner account cannot traverse or can write to one or more media directories."
+run_as_runner "find '$MEDIA_DIR' \\( -name '@eaDir' -o -name '#recycle' -o -name '#snapshot' -o -name '.TemporaryItems' \\) -prune -o -type f -exec sh -c 'for path do test -r \"\\$path\" && test ! -w \"\\$path\" || exit 1; done' sh {} +" \
     || fail "Runner account cannot read every media file or can write to one or more media files."
+
 if [ -S /var/run/docker.sock ]; then
     run_as_runner "test ! -r /var/run/docker.sock && test ! -w /var/run/docker.sock" \
         || fail "Runner account can access the Docker socket; remove that permission before continuing."
