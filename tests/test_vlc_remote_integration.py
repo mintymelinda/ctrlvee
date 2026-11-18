@@ -38,7 +38,6 @@ SUPPORTED_MEDIA_EXTENSIONS = {
     ".wma",
     ".wmv",
 }
-MAX_MEDIA_FIXTURES = 5
 
 
 class RemoteVLCIntegrationTests(unittest.TestCase):
@@ -102,9 +101,7 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
                 continue
             candidates.append(path)
 
-        return sorted(candidates, key=lambda path: str(path).casefold())[
-            :MAX_MEDIA_FIXTURES
-        ]
+        return sorted(candidates, key=lambda path: str(path).casefold())
 
     def exercise_media_file(self, fixture_path):
         relative_path = fixture_path.relative_to(self.media_dir)
@@ -203,7 +200,7 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
                 )
 
     def test_remote_playback_lifecycle_with_media_folder_fixtures(self):
-        """Play and control up to five user-supplied files; never alter their bytes."""
+        """Play and control every discovered user-supplied file; never alter their bytes."""
         fixtures = self.media_fixtures()
         self.assertTrue(
             fixtures,
