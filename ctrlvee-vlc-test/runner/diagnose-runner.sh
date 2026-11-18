@@ -84,7 +84,7 @@ done
 
 section "System commands"
 # Required by the bootstrapper, installer, runner configuration and diagnostics.
-for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp mkdir cat chmod rm dirname pwd readlink; do
+for command_name in sh bash curl tar gzip sha256sum stty git awk sed grep find id uname mktemp mkdir cat chmod rm dirname pwd readlink touch ls head; do
     check_command "$command_name" required
 done
 if command -v ldd >/dev/null 2>&1; then
@@ -104,9 +104,19 @@ else
     fail "ldconfig is unavailable and no compatible helper is available."
 fi
 # Required by setup-runner.sh.
-for command_name in su chown openssl synouser synoacltool; do
-    check_command "$command_name" optional
+for command_name in su chown openssl; do
+    check_command "$command_name" required
 done
+if command -v synouser >/dev/null 2>&1 || [ -x /usr/syno/sbin/synouser ]; then
+    ok "synouser is available."
+else
+    fail "DSM synouser is missing."
+fi
+if command -v synoacltool >/dev/null 2>&1 || [ -x /usr/syno/bin/synoacltool ]; then
+    ok "synoacltool is available."
+else
+    fail "DSM synoacltool is missing."
+fi
 
 section "C library and runtime"
 if command -v getconf >/dev/null 2>&1; then
