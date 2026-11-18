@@ -31,22 +31,49 @@ command -v curl >/dev/null 2>&1 || fail "curl is required."
 command -v tar >/dev/null 2>&1 || fail "tar is required."
 command -v sha256sum >/dev/null 2>&1 || fail "sha256sum is required."
 command -v stty >/dev/null 2>&1 || fail "stty is required."
+command -v grep >/dev/null 2>&1 || fail "grep is required by GitHub runner configuration."
+command -v bash >/dev/null 2>&1 || fail "bash is required by GitHub runner configuration."
+command -v readlink >/dev/null 2>&1 || fail "readlink is required by GitHub runner configuration."
+command -v dirname >/dev/null 2>&1 || fail "dirname is required by GitHub runner configuration."
+command -v pwd >/dev/null 2>&1 || fail "pwd is required by GitHub runner configuration."
+command -v rm >/dev/null 2>&1 || fail "rm is required."
+command -v mktemp >/dev/null 2>&1 || fail "mktemp is required."
 [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 
-# DSM may provide glibc and its dynamic loader without shipping ldd. GitHub's
-# config.sh requires the command, so install a private compatibility wrapper
-# inside the runner-owned directory rather than modifying the DSM host.
+# DSM may provide glibc and its dynamic loader without shipping ldd or
+# ldconfig. GitHub's config.sh requires both commands. Keep compatibility
+# helpers private to this runner instead of modifying the DSM host.
+NEED_LOCAL_TOOLS=0
 if ! command -v ldd >/dev/null 2>&1; then
-    [ -r "${SCRIPT_DIR}/ldd-compat.sh" ] || fail "DSM has no ldd command and the bundled ldd-compat.sh helper is missing."
-    mkdir -p "${RUNNER_DIR}/.local-tools"
-    cat "${SCRIPT_DIR}/ldd-compat.sh" > "${RUNNER_DIR}/.local-tools/ldd"
-    chmod 700 "${RUNNER_DIR}/.local-tools/ldd"
-    PATH="${RUNNER_DIR}/.local-tools:${PATH}"
-    export PATH
+    [ -r "\${SCRIPT_DIR}/ldd-compat.sh" ] || fail "DSM has no ldd command and the bundled ldd-compat.sh helper is missing."
+    NEED_LOCAL_TOOLS=1
+fi
+if ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ]; then
+    [ -r "\${SCRIPT_DIR}/ldconfig-compat.sh" ] || fail "DSM has no ldconfig command and the bundled ldconfig-compat.sh helper is missing."
+    NEED_LOCAL_TOOLS=1
+fi
+
+if [ "$NEED_LOCAL_TOOLS" -eq 1 ]; then
+    mkdir -p "\${RUNNER_DIR}/.local-tools"
+fi
+if ! command -v ldd >/dev/null 2>&1; then
+    cat "\${SCRIPT_DIR}/ldd-compat.sh" > "\${RUNNER_DIR}/.local-tools/ldd"
+    chmod 700 "\${RUNNER_DIR}/.local-tools/ldd"
     printf '%s\n' "DSM has no system ldd; using the runner-local glibc dynamic-loader compatibility helper."
 fi
+if ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ]; then
+    cat "\${SCRIPT_DIR}/ldconfig-compat.sh" > "\${RUNNER_DIR}/.local-tools/ldconfig"
+    chmod 700 "\${RUNNER_DIR}/.local-tools/ldconfig"
+    printf '%s\n' "DSM has no system ldconfig; using a runner-local, read-only ICU discovery helper."
+fi
+if [ -d "\${RUNNER_DIR}/.local-tools" ]; then
+    PATH="\${RUNNER_DIR}/.local-tools:\${PATH}"
+    export PATH
+fi
 command -v ldd >/dev/null 2>&1 || fail "Could not provide ldd for GitHub runner configuration."
-
+if ! [ -x "$(command -v ldconfig 2>/dev/null)" ] && [ ! -x /sbin/ldconfig ]; then
+    fail "Could not provide ldconfig for GitHub runner configuration."
+fi
 
 printf '%s\n' "This installs the official GitHub Actions runner v${RUNNER_VERSION} for:"
 printf '  %s\n' "$REPOSITORY_URL"
