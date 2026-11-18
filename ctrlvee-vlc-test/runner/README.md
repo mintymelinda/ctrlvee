@@ -13,7 +13,7 @@ This directory installs the **official GitHub Actions self-hosted runner** direc
 
 3. The setup script creates the dedicated DSM account `ctrlvee-runner` if it does not already exist. It generates an unguessable random password that is never displayed or saved, gives the account no DSM application privileges, and refuses to use an account in the `administrators` group.
 4. It removes stale per-user ACL entries left by earlier setup attempts, restores traversal-only access on each parent directory, grants read/traverse access to the runner scripts, and grants read-only access to actual media directories and files. It deliberately does not add DENY entries to parent directories: Synology can propagate those entries into child media folders and block fixture access. The runner's ability to list parent-directory names therefore follows the NAS's existing ACLs; this setup does not promise to hide those names. It verifies that the runner can read fixtures but cannot write media directories or files, read the local VLC `.env` file, or access the Docker socket when present. Synology `@eaDir`, recycle-bin, snapshot, and temporary metadata trees are excluded from fixture permissions and checks.
-5. The installer prompts for the short-lived registration token **as the unprivileged runner account**. The token is not written to disk or shell history. It then downloads the official GitHub Actions runner v2.338.2 and verifies its pinned SHA-256 checksum. If DSM does not provide `ldd`, the installer creates a private `actions-runner/.local-tools/ldd` compatibility helper backed by DSM's glibc dynamic loader and adds it to `PATH` for runner configuration. It does not modify system libraries or require installing a Linux package.
+5. The installer prompts for the short-lived registration token **as the unprivileged runner account**. The token is not written to disk or shell history. It then downloads the official GitHub Actions runner v2.338.2 and verifies its pinned SHA-256 checksum. If DSM does not provide `ldd`, the installer creates a private `actions-runner/.local-tools/ldd` compatibility helper backed by DSM's glibc dynamic loader. If DSM also lacks `ldconfig`, it creates a private, read-only `actions-runner/.local-tools/ldconfig` helper that reports ICU shared libraries found in standard loader directories and any `LD_LIBRARY_PATH` directories. Both helpers are added to `PATH` for runner configuration. They do not modify system libraries or the loader cache and do not install missing libraries.
 6. Start the runner:
 
    ```sh
@@ -43,7 +43,7 @@ Keep the runner process running in the foreground under Task Scheduler. Do not c
 
 ## Requirements and security
 
-- Synology DSM on x86_64 with its glibc dynamic loader (the workflow also requires the `x64` label). A system `ldd` command is optional; the installer supplies a runner-local compatibility helper when needed.
+- Synology DSM on x86_64 with its glibc dynamic loader (the workflow also requires the `x64` label). System `ldd` and `ldconfig` commands are optional; the installer supplies runner-local compatibility helpers when needed. The host must still provide the glibc dynamic loader and an ICU shared library (`libicu*.so`) discoverable in standard loader directories or `LD_LIBRARY_PATH`.
 - Run the setup script through `sudo` from an interactive SSH terminal.
 - Outbound HTTPS access to GitHub.
 - DSM `synouser` and `synoacltool`, plus `openssl`, `curl`, `tar`, `sha256sum`, `find`, and `su`.
