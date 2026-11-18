@@ -38,6 +38,7 @@ command -v dirname >/dev/null 2>&1 || fail "dirname is required by GitHub runner
 command -v pwd >/dev/null 2>&1 || fail "pwd is required by GitHub runner configuration."
 command -v rm >/dev/null 2>&1 || fail "rm is required."
 command -v mktemp >/dev/null 2>&1 || fail "mktemp is required."
+command -v touch >/dev/null 2>&1 || fail "touch is required by GitHub runner configuration."
 [ -t 0 ] && [ -t 1 ] || fail "Run this installer from an interactive SSH terminal."
 
 # DSM may provide glibc and its dynamic loader without shipping ldd or
@@ -48,7 +49,7 @@ if ! command -v ldd >/dev/null 2>&1; then
     [ -r "${SCRIPT_DIR}/ldd-compat.sh" ] || fail "DSM has no ldd command and the bundled ldd-compat.sh helper is missing."
     NEED_LOCAL_TOOLS=1
 fi
-if ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ]; then
+if ! [ -x "$(command -v ldconfig 2>/dev/null)" ] && [ ! -x /sbin/ldconfig ]; then
     [ -r "${SCRIPT_DIR}/ldconfig-compat.sh" ] || fail "DSM has no ldconfig command and the bundled ldconfig-compat.sh helper is missing."
     NEED_LOCAL_TOOLS=1
 fi
@@ -61,7 +62,7 @@ if ! command -v ldd >/dev/null 2>&1; then
     chmod 700 "${RUNNER_DIR}/.local-tools/ldd"
     printf '%s\n' "DSM has no system ldd; using the runner-local glibc dynamic-loader compatibility helper."
 fi
-if ! command -v ldconfig >/dev/null 2>&1 && [ ! -x /sbin/ldconfig ]; then
+if ! [ -x "$(command -v ldconfig 2>/dev/null)" ] && [ ! -x /sbin/ldconfig ]; then
     cat "${SCRIPT_DIR}/ldconfig-compat.sh" > "${RUNNER_DIR}/.local-tools/ldconfig"
     chmod 700 "${RUNNER_DIR}/.local-tools/ldconfig"
     printf '%s\n' "DSM has no system ldconfig; using a runner-local, read-only ICU discovery helper."
