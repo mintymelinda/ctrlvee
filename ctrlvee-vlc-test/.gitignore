@@ -1,3 +1,3 @@
 .env
 media/
-runner/actions-runner/
+runner/actions-runner/\nrunner/actions-runner/\nrunner/.runner-download.*\n
