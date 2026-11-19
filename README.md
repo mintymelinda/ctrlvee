@@ -34,7 +34,7 @@ For a split setup with VLC on a LAN host (for example, `192.168.0.15`) and CtrlV
 2. Make the VLC HTTP interface reachable from the NAS/container on the LAN. Restrict access with the Plex server firewall to your NAS; do not expose the VLC control port to the public internet.
 3. Copy `template.env` to `.env`, then set `DISCORD_TOKEN`, `TMDB_API_KEY`, `ALLOWED_ROLES`, and `VLC_HOST=192.168.0.15`. Set `VLC_PASSWORD` to the password configured in VLC.
 4. Create the persistent data directory and make it writable by the container user. The defaults below use UID/GID 1000; change `PUID` and `PGID` in `.env` if your NAS uses different IDs.
-5. Start CtrlVee:
+5. Start the dedicated Discord bot runner:
 
 ```bash
 cp template.env .env
@@ -42,12 +42,12 @@ mkdir -p data
 sudo chown -R 1000:1000 data
 # Edit .env before starting; set the Discord/TMDB credentials and VLC_HOST.
 docker compose up -d --build
-docker compose logs -f ctrlvee
+docker compose logs -f discord-bot-runner
 ```
 
 Stop the service with `docker compose down`. Its state remains in `./data`; restarting or recreating the container does not remove that directory.
 
-The Compose deployment stores queue backups, scheduled items, playlist autosaves, watch statistics, and the Discord playback-panel registry under `/app/data` in the container, backed by `./data` on the NAS.
+The `discord-bot-runner` service is the single long-running CtrlVee Discord bot process. `DISCORD_TOKEN` selects the Discord bot account it logs in as; reusing another bot's token changes its identity, not its code or commands. The Compose deployment stores queue backups, scheduled items, playlist autosaves, watch statistics, and the Discord playback-panel registry under `/app/data` in the container, backed by `./data` on the NAS.
 
 ### Media paths for schedules and watch folders
 
