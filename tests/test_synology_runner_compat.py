@@ -32,6 +32,8 @@ class SynologyRunnerCompatibilityTests(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile.actions-runner").read_text()
         self.assertIn("FROM debian:bookworm-slim", dockerfile)
         self.assertIn("RUNNER_VERSION=2.338.2", dockerfile)
+        self.assertIn("RUNNER_UID=1058", dockerfile)
+        self.assertIn("RUNNER_GID=100", dockerfile)
         self.assertIn("sha256sum --check --status", dockerfile)
         self.assertIn("gosu", dockerfile)
 
