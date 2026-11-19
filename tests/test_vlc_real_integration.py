@@ -178,6 +178,28 @@ class RealVLCIntegrationTests(unittest.TestCase):
             "playlist_current_id": current_item,
         }
 
+    def _run_traced_command(self, method_name, command):
+        """Record synchronous command timing and VLC state around one operation."""
+        started_at = time.monotonic()
+        event = {
+            "command": method_name,
+            "started_at": started_at,
+            "before": self._vlc_state_snapshot(),
+        }
+        try:
+            result = command()
+            event["result_type"] = type(result).__name__
+            return result
+        except Exception as error:
+            event["error"] = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            event["command_finished_at"] = time.monotonic()
+            event["duration_seconds"] = round(event["command_finished_at"] - started_at, 4)
+            event["observed_after"] = self._vlc_state_snapshot()
+            event["recorded_at"] = time.monotonic()
+            self.command_trace.append(event)
+
     async def _run_traced_async_command(self, method_name, *args):
         """Record command timing and VLC state without hiding command failures."""
         started_at = time.monotonic()
@@ -384,16 +406,16 @@ class RealVLCIntegrationTests(unittest.TestCase):
         # before the input thread has started advancing its clock. Require
         # observable playback progress before issuing another navigation
         # command; a state-only check leaves a startup race in headless VLC.
-        self.controller.next()
+        self._run_traced_command("next", self.controller.next)
         self.wait_for_playing_item(second_id)
         self.wait_for_playback_progress(second_id)
-        self.controller.previous()
+        self._run_traced_command("previous", self.controller.previous)
         self.wait_for_playing_item(first_id)
         self.wait_for_playback_progress(first_id)
 
         # VLC exposes repeat-current and repeat-playlist as independent toggles.
         self.assertEqual(self.controller.get_repeat_state(), "none")
-        self.controller.send_command("pl_loop")
+        self._run_traced_command("pl_loop", lambda: self.controller.send_command("pl_loop"))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "all",
             "repeat-playlist mode to enable",
@@ -403,7 +425,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             lambda: self.controller.get_repeat_state() == "none",
             "repeat-playlist mode to disable",
         )
-        self.controller.send_command("pl_repeat")
+        self._run_traced_command("pl_repeat", lambda: self.controller.send_command("pl_repeat"))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "one",
             "repeat-current mode to enable",
@@ -416,7 +438,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         # Verify the actual selected item; VLC command responses are not a
         # reliable acknowledgement for every HTTP-interface command.
-        self.controller.play_item(third_id)
+        self._run_traced_command("play_item", lambda: self.controller.play_item(third_id))
         self.wait_for_current_item(third_id)
 
     def test_real_vlc_shuffle_state_changes_are_observable(self):
