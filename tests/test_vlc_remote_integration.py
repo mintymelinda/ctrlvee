@@ -238,6 +238,7 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
         try:
             for fixture_path in fixtures:
                 fixture_name = fixture_path.relative_to(self.media_dir).as_posix()
+                self.seek_coverage[fixture_name] = "not reached seek phase"
                 with self.subTest(media=fixture_name):
                     self.exercise_media_file(fixture_path)
         finally:
