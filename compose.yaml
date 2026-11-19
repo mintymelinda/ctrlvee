@@ -1,10 +1,11 @@
 services:
-  ctrlvee:
+  discord-bot-runner:
     build:
       context: .
       dockerfile: Dockerfile
     image: ctrlvee:local
-    container_name: ctrlvee
+    container_name: ctrlvee-discord-bot-runner
+    command: ["python", "bot.py"]
     restart: unless-stopped
     init: true
     stop_grace_period: 30s
