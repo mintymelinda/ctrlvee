@@ -25,7 +25,7 @@ jobs:
       - name: Validate remote VLC configuration and media fixtures
         env:
           REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
-          REMOTE_VLC_MEDIA_DIR: /volume1/docker/ctrlvee-vlc-test/media
+          REMOTE_VLC_MEDIA_DIR: /volume1/docker/ctrlvee/ctrlvee-vlc-test/media
         run: |
           test -n "$REMOTE_VLC_PASSWORD" || { echo "REMOTE_VLC_PASSWORD secret is required"; exit 1; }
           test -d "$REMOTE_VLC_MEDIA_DIR" || { echo "Remote VLC media directory does not exist on this runner: $REMOTE_VLC_MEDIA_DIR"; exit 1; }
@@ -43,6 +43,6 @@ jobs:
           REMOTE_VLC_HOST: 127.0.0.1
           REMOTE_VLC_PORT: "18080"
           REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
-          REMOTE_VLC_MEDIA_DIR: /volume1/docker/ctrlvee-vlc-test/media
+          REMOTE_VLC_MEDIA_DIR: /volume1/docker/ctrlvee/ctrlvee-vlc-test/media
           PYTHONPATH: ${{ github.workspace }}
         run: python tests/test_vlc_remote_integration.py
