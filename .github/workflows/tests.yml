@@ -93,6 +93,16 @@ jobs:
       - name: Build integration image with headless VLC
         run: docker build --file Dockerfile.integration --tag ctrlvee:vlc-integration .
 
+      - name: Verify integration image excludes the unused Qt interface
+        run: |
+          docker run --rm --entrypoint sh ctrlvee:vlc-integration -ec '
+            cvlc --version
+            if dpkg-query -s vlc-plugin-qt >/dev/null 2>&1; then
+              echo "Unexpected Qt interface plugin in headless VLC test image"
+              exit 1
+            fi
+          '
+
       - name: Run controller tests against real VLC
         run: docker run --rm ctrlvee:vlc-integration
 
