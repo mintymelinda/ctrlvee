@@ -22,7 +22,6 @@ jobs:
         with:
           ref: main
 
-
       - name: Validate remote VLC configuration and media fixtures
         env:
           REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
