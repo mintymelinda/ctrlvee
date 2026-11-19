@@ -19,17 +19,41 @@ fi
 
 [ -f "$PROJECT_DIR/.env" ] || fail "Missing $PROJECT_DIR/.env. Create it from .env.example and set VLC_TEST_PASSWORD first."
 [ -d "$PROJECT_DIR/media" ] || fail "Missing media directory: $PROJECT_DIR/media"
+[ -f "$PROJECT_DIR/../Dockerfile.actions-runner" ] || fail "Missing repository-root Dockerfile.actions-runner."
+[ -f "$SCRIPT_DIR/container-entrypoint.sh" ] || fail "Missing runner container entrypoint."
 command -v stty >/dev/null 2>&1 || fail "stty is required for hidden token entry."
 command -v id >/dev/null 2>&1 || fail "id is required to map the runner account to NAS media ACLs."
+command -v mktemp >/dev/null 2>&1 || fail "mktemp is required to create an isolated Docker build context."
 id ctrlvee-runner >/dev/null 2>&1 || fail "The existing ctrlvee-runner DSM account is required; run the previous account setup first."
 RUNNER_UID=$(id -u ctrlvee-runner)
 RUNNER_GID=$(id -g ctrlvee-runner)
 export RUNNER_UID RUNNER_GID
 
 cd "$PROJECT_DIR"
-# Compose reads .env for interpolation, but the runner service is not given
-# the VLC password as an environment variable.
-$COMPOSE build actions-runner
+
+# Docker 20.10 on DSM attempts to stat inaccessible host-runner paths before
+# applying .dockerignore. Build from a minimal temporary context instead:
+# this image needs only its Dockerfile and the container entrypoint script.
+BUILD_CONTEXT=$(mktemp -d "${TMPDIR:-/tmp}/ctrlvee-runner-build.XXXXXX")
+cleanup_build_context() {
+    rm -rf "$BUILD_CONTEXT"
+}
+trap cleanup_build_context EXIT HUP INT TERM
+
+mkdir -p "$BUILD_CONTEXT/ctrlvee-vlc-test/runner"
+cp "$PROJECT_DIR/../Dockerfile.actions-runner" "$BUILD_CONTEXT/Dockerfile.actions-runner"
+cp "$SCRIPT_DIR/container-entrypoint.sh" "$BUILD_CONTEXT/ctrlvee-vlc-test/runner/container-entrypoint.sh"
+
+printf '%s\n' "Building actions-runner from an isolated context..."
+docker build \
+    -f "$BUILD_CONTEXT/Dockerfile.actions-runner" \
+    --build-arg "RUNNER_UID=$RUNNER_UID" \
+    --build-arg "RUNNER_GID=$RUNNER_GID" \
+    -t ctrlvee-actions-runner:local \
+    "$BUILD_CONTEXT"
+
+cleanup_build_context
+trap - EXIT HUP INT TERM
 
 printf '%s\n' "Generate a short-lived repository runner token in GitHub:"
 printf '%s\n' "  Settings > Actions > Runners > New self-hosted runner"

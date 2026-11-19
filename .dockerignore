@@ -13,3 +13,13 @@ screenshots
 .pytest_cache
 .mypy_cache
 .ruff_cache
+
+# Host-installed Synology runner state is runtime data, not image build input.
+# It may be owned by the dedicated runner account and is not readable by the
+# account invoking Docker builds.
+ctrlvee-vlc-test/runner/actions-runner/
+ctrlvee-vlc-test/runner/.local-tools/
+ctrlvee-vlc-test/runner/_work/
+ctrlvee-vlc-test/runner/.runner
+ctrlvee-vlc-test/runner/.credentials*
+ctrlvee-vlc-test/runner/.service
