@@ -48,8 +48,10 @@ services:
     cap_drop:
       - ALL
     cap_add:
-      # Entrypoint fixes named-volume ownership, then drops privileges.
+      # Entrypoint initializes volume ownership, then drops privileges.
       - CHOWN
+      - SETGID
+      - SETUID
 
 volumes:
   actions-runner-data:
