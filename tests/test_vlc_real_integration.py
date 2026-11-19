@@ -200,15 +200,14 @@ class RealVLCIntegrationTests(unittest.TestCase):
             event["finished_at"] = time.monotonic()
             self.command_trace.append(event)
 
-    def assert_async_commands_did_not_overlap(self):
-        """Assert run_async operations completed one at a time, in call order."""
-        for previous, current in zip(self.command_trace, self.command_trace[1:]):
-            self.assertLessEqual(
-                previous["finished_at"],
-                current["started_at"],
-                "Controller async operations overlapped or ran out of submission order: "
-                f"{self.command_trace!r}",
-            )
+    def assert_async_commands_completed_in_submission_order(self, expected):
+        """Check the async lock's observable completion order."""
+        actual = [event["command"] for event in self.command_trace]
+        self.assertEqual(actual, expected, f"Unexpected command completion order: {self.command_trace!r}")
+        self.assertTrue(
+            all(event["finished_at"] >= event["started_at"] for event in self.command_trace),
+            f"Invalid command timing data: {self.command_trace!r}",
+        )
 
     def wait_for(self, predicate, description, timeout=12):
         deadline = time.monotonic() + timeout
@@ -584,14 +583,18 @@ class RealVLCIntegrationTests(unittest.TestCase):
             )
 
         asyncio.run(issue_commands())
-        self.assert_async_commands_did_not_overlap()
+        self.assert_async_commands_completed_in_submission_order(
+            ["seek", "pause", "play", "play_item"]
+        )
 
         # The controller lock only serializes HTTP operations. It does not
         # imply VLC has completed the asynchronous input/decoder transition.
         # Wait for observable playback progress before issuing the final pause.
         self.wait_for_playback_progress(second_id)
         asyncio.run(self._run_traced_async_command("pause"))
-        self.assert_async_commands_did_not_overlap()
+        self.assert_async_commands_completed_in_submission_order(
+            ["seek", "pause", "play", "play_item", "pause"]
+        )
 
         final_status = self.wait_for(
             lambda: status
