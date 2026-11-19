@@ -13,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl git gosu jq libcurl4 libicu72 libkrb5-3 liblttng-ust1 \
-        libssl3 libstdc++6 libunwind8 libuuid1 zlib1g \
+        libssl3 python3 python3-pip python3-venv libstdc++6 libunwind8 libuuid1 zlib1g \
     && rm -rf /var/lib/apt/lists/* \
     && (getent group ${RUNNER_GID} >/dev/null || groupadd --gid ${RUNNER_GID} runner) \
     && useradd --system --uid ${RUNNER_UID} --gid ${RUNNER_GID} --create-home --home-dir /home/runner --shell /usr/sbin/nologin runner \
