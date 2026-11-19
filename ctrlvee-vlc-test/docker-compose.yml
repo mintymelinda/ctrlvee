@@ -16,7 +16,7 @@ services:
       - "127.0.0.1:18080:8080"
     volumes:
       # VLC reads the dedicated fixtures; it never modifies their bytes.
-      - /volume1/docker/ctrlvee-vlc-test/media:/media:ro
+      - /volume1/docker/ctrlvee/ctrlvee-vlc-test/media:/media:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -42,7 +42,7 @@ services:
     volumes:
       - actions-runner-data:/runner
       # Preserve the host path because the workflow checks this exact path.
-      - /volume1/docker/ctrlvee-vlc-test/media:/volume1/docker/ctrlvee-vlc-test/media:ro
+      - /volume1/docker/ctrlvee/ctrlvee-vlc-test/media:/volume1/docker/ctrlvee/ctrlvee-vlc-test/media:ro
     read_only: true
     tmpfs:
       - /tmp

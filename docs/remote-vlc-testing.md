@@ -16,7 +16,7 @@ This deployment targets x86_64. If the result is different, stop and adjust the 
 
 Create the dedicated host directory:
 
-    mkdir -p /volume1/docker/ctrlvee-vlc-test/media
+    mkdir -p /volume1/docker/ctrlvee/ctrlvee-vlc-test/media
 
 Place one or more representative audio/video files in it. The remote integration test discovers supported files and plays them through VLC. The test does not create, edit, rename, or delete media files; it only adds and removes its own VLC playlist entries.
 
@@ -38,7 +38,7 @@ Use `docker compose` instead of `docker-compose` if Compose V2 is installed.
 The VLC container:
 - runs VLC as an unprivileged user;
 - has a read-only root filesystem and drops Linux capabilities;
-- mounts only `/volume1/docker/ctrlvee-vlc-test/media` at `/media`, read-only;
+- mounts only `/volume1/docker/ctrlvee/ctrlvee-vlc-test/media` at `/media`, read-only;
 - publishes its HTTP interface only as `127.0.0.1:18080` on the Synology host.
 
 Verify it locally:
