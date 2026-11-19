@@ -780,8 +780,46 @@ class VLCController:
         return self.send_command("pl_next")
         
     def previous(self):
-        """Play previous track"""
-        return self.send_command("pl_previous")
+        """Select the previous playlist item without VLC's unstable pl_previous path.
+
+        VLC 3.0.24 can terminate with SIGSEGV while processing pl_previous in
+        the headless integration environment. Selecting the resolved playlist
+        entry with pl_play avoids that native navigation path. In shuffle mode
+        we retain VLC's own history because the playlist order is not the
+        playback order.
+        """
+        playlist = self.get_playlist()
+        if playlist is None:
+            return None
+
+        items = playlist.findall(".//leaf")
+        if not items:
+            return None
+
+        current_index = next(
+            (index for index, item in enumerate(items) if item.get("current")),
+            None,
+        )
+        if current_index is None:
+            return None
+
+        if self.get_shuffle_state():
+            return self.send_command("pl_previous")
+
+        repeat_state = self.get_repeat_state()
+        if repeat_state == "one":
+            target = items[current_index]
+        elif current_index > 0:
+            target = items[current_index - 1]
+        elif repeat_state == "all":
+            target = items[-1]
+        else:
+            # At the beginning of a non-repeating playlist, Previous restarts
+            # the selected item rather than attempting to navigate before it.
+            target = items[current_index]
+
+        target_id = target.get("id")
+        return self.play_item(target_id) if target_id else None
         
     def seek(self, seconds):
         """Seek to a specific position"""
