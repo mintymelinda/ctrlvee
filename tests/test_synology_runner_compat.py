@@ -49,7 +49,7 @@ class SynologyRunnerCompatibilityTests(unittest.TestCase):
         self.assertIn("network_mode: host", compose)
         self.assertIn("actions-runner-data:/runner", compose)
         self.assertIn(
-            "/volume1/docker/ctrlvee-vlc-test/media:/volume1/docker/ctrlvee-vlc-test/media:ro",
+            "/volume1/docker/ctrlvee/ctrlvee-vlc-test/media:/volume1/docker/ctrlvee/ctrlvee-vlc-test/media:ro",
             compose,
         )
         self.assertNotIn("/var/run/docker.sock", compose)
