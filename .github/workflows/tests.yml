@@ -101,10 +101,12 @@ jobs:
           for attempt in 1 2 3; do
             echo "Playlist navigation stability run ${attempt}/3"
             docker run --rm \
+              --env PYTHONPATH=/app:/app/tests \
               --entrypoint python \
               ctrlvee:vlc-integration \
-              tests/test_vlc_real_integration.py \
-              RealVLCIntegrationTests.test_real_vlc_playlist_navigation_and_repeat_modes
+              -m unittest \
+              test_vlc_real_integration.RealVLCIntegrationTests.test_real_vlc_playlist_navigation_and_repeat_modes \
+              --verbose
           done
 
       - name: Run optional live Discord test-server checks
