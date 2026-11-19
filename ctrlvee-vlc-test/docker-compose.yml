@@ -29,6 +29,9 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile.actions-runner
+      args:
+        RUNNER_UID: ${RUNNER_UID:-1058}
+        RUNNER_GID: ${RUNNER_GID:-100}
     image: ctrlvee-actions-runner:local
     container_name: ctrlvee-actions-runner
     init: true
