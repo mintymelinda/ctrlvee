@@ -75,7 +75,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
                 "--http-port", str(self.port),
                 "--http-password", self.password,
                 "--no-video",
-                "--aout", "dummy",
+                "--no-audio",
                 "--no-one-instance",
                 "--no-media-library",
                 "--ignore-config",
@@ -93,6 +93,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             password=self.password,
             queue_backup_file=str(self.queue_backup_file),
         )
+        self.command_trace = []
 
         deadline = time.monotonic() + 20
         consecutive_successes = 0
@@ -149,7 +150,90 @@ class RealVLCIntegrationTests(unittest.TestCase):
         return (
             f"VLC version: {self.vlc_version}\\n"
             f"VLC process exit: {self.process.poll()}\\n"
+            f"Command trace: {self.command_trace!r}\\n"
             f"Recent VLC output:\\n{self.log_file.read()}"
+        )
+
+    def _vlc_state_snapshot(self):
+        """Capture the observable VLC state surrounding one controller command."""
+        if self.process.poll() is not None:
+            return {"process_exit": self.process.returncode}
+        status = self.controller.get_status()
+        playlist = self.controller.get_playlist()
+        current_item = None
+        if playlist is not None:
+            current_item = next(
+                (
+                    item.get("id")
+                    for item in playlist.findall(".//leaf")
+                    if item.get("current")
+                ),
+                None,
+            )
+        return {
+            "process_exit": self.process.poll(),
+            "state": status.findtext("state") if status is not None else None,
+            "currentplid": status.findtext("currentplid") if status is not None else None,
+            "time": status.findtext("time") if status is not None else None,
+            "playlist_current_id": current_item,
+        }
+
+    def _run_traced_command(self, method_name, command):
+        """Record synchronous command timing and VLC state around one operation."""
+        started_at = time.monotonic()
+        event = {
+            "command": method_name,
+            "started_at": started_at,
+            "before": self._vlc_state_snapshot(),
+        }
+        try:
+            result = command()
+            event["result_type"] = type(result).__name__
+            return result
+        except Exception as error:
+            event["error"] = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            event["command_finished_at"] = time.monotonic()
+            event["duration_seconds"] = round(event["command_finished_at"] - started_at, 4)
+            event["observed_after"] = self._vlc_state_snapshot()
+            event["recorded_at"] = time.monotonic()
+            self.command_trace.append(event)
+
+    async def _run_traced_async_command(self, method_name, *args):
+        """Record command timing and VLC state without hiding command failures."""
+        started_at = time.monotonic()
+        event = {
+            "command": method_name,
+            "args": repr(args),
+            "started_at": started_at,
+            "before": self._vlc_state_snapshot(),
+        }
+        try:
+            result = await self.controller.run_async(method_name, *args)
+            event["result_type"] = type(result).__name__
+            event["command_finished_at"] = time.monotonic()
+            return result
+        except Exception as error:
+            event["error"] = f"{type(error).__name__}: {error}"
+            raise
+        finally:
+            event.setdefault("command_finished_at", time.monotonic())
+            event["duration_seconds"] = round(event["command_finished_at"] - started_at, 4)
+            event["observed_after"] = self._vlc_state_snapshot()
+            event["recorded_at"] = time.monotonic()
+            self.command_trace.append(event)
+
+    def assert_async_commands_completed_in_submission_order(self, expected):
+        """Check the async lock's observable completion order."""
+        ordered = sorted(self.command_trace, key=lambda event: event["started_at"])
+        actual = [event["command"] for event in ordered]
+        self.assertEqual(actual, expected, f"Unexpected command submission order: {self.command_trace!r}")
+        completion_times = [event["command_finished_at"] for event in ordered]
+        self.assertEqual(
+            completion_times,
+            sorted(completion_times),
+            f"Serialized commands completed out of submission order: {self.command_trace!r}",
         )
 
     def wait_for(self, predicate, description, timeout=12):
@@ -314,7 +398,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
     def test_real_vlc_playlist_navigation_and_repeat_modes(self):
         first_id, second_id, third_id = self.load_playlist()
-        self.controller.play_item(first_id)
+        self._run_traced_command("play_item_first", lambda: self.controller.play_item(first_id))
         self.wait_for_playing_item(first_id)
         self.wait_for_playback_progress(first_id)
 
@@ -322,31 +406,31 @@ class RealVLCIntegrationTests(unittest.TestCase):
         # before the input thread has started advancing its clock. Require
         # observable playback progress before issuing another navigation
         # command; a state-only check leaves a startup race in headless VLC.
-        self.controller.next()
+        self._run_traced_command("next", self.controller.next)
         self.wait_for_playing_item(second_id)
         self.wait_for_playback_progress(second_id)
-        self.controller.previous()
+        self._run_traced_command("previous", self.controller.previous)
         self.wait_for_playing_item(first_id)
         self.wait_for_playback_progress(first_id)
 
         # VLC exposes repeat-current and repeat-playlist as independent toggles.
         self.assertEqual(self.controller.get_repeat_state(), "none")
-        self.controller.send_command("pl_loop")
+        self._run_traced_command("pl_loop", lambda: self.controller.send_command("pl_loop"))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "all",
             "repeat-playlist mode to enable",
         )
-        self.assertIsNotNone(self.controller.send_command("pl_loop"))
+        self.assertIsNotNone(self._run_traced_command("pl_loop", lambda: self.controller.send_command("pl_loop")))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "none",
             "repeat-playlist mode to disable",
         )
-        self.controller.send_command("pl_repeat")
+        self._run_traced_command("pl_repeat", lambda: self.controller.send_command("pl_repeat"))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "one",
             "repeat-current mode to enable",
         )
-        self.assertIsNotNone(self.controller.send_command("pl_repeat"))
+        self.assertIsNotNone(self._run_traced_command("pl_repeat", lambda: self.controller.send_command("pl_repeat")))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "none",
             "repeat-current mode to disable",
@@ -354,7 +438,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
         # Verify the actual selected item; VLC command responses are not a
         # reliable acknowledgement for every HTTP-interface command.
-        self.controller.play_item(third_id)
+        self._run_traced_command("play_item", lambda: self.controller.play_item(third_id))
         self.wait_for_current_item(third_id)
 
     def test_real_vlc_shuffle_state_changes_are_observable(self):
@@ -515,27 +599,36 @@ class RealVLCIntegrationTests(unittest.TestCase):
     def test_real_vlc_concurrent_commands_use_serialized_controller_path(self):
         first_id, second_id, _ = self.load_playlist()
         self.assertIsNotNone(self.controller.play_item(first_id))
-        self.wait_for_current_item(first_id)
+        self.wait_for_playback_progress(first_id)
 
         async def issue_commands():
             return await asyncio.gather(
-                self.controller.run_async("seek", 3),
-                self.controller.run_async("pause"),
-                self.controller.run_async("play"),
-                self.controller.run_async("play_item", second_id),
-                self.controller.run_async("pause"),
+                self._run_traced_async_command("seek", 3),
+                self._run_traced_async_command("pause"),
+                self._run_traced_async_command("play"),
+                self._run_traced_async_command("play_item", second_id),
             )
 
-        results = asyncio.run(issue_commands())
-        # Command response XML is not a reliable acknowledgement for every
-        # VLC action. Verify the final selected item and playback state below.
-        self.wait_for_current_item(second_id)
+        asyncio.run(issue_commands())
+        self.assert_async_commands_completed_in_submission_order(
+            ["seek", "pause", "play", "play_item"]
+        )
+
+        # The controller lock only serializes HTTP operations. It does not
+        # imply VLC has completed the asynchronous input/decoder transition.
+        # Wait for observable playback progress before issuing the final pause.
+        self.wait_for_playback_progress(second_id)
+        asyncio.run(self._run_traced_async_command("pause"))
+        self.assert_async_commands_completed_in_submission_order(
+            ["seek", "pause", "play", "play_item", "pause"]
+        )
+
         final_status = self.wait_for(
             lambda: status
             if (status := self.controller.get_status()) is not None
             and status.findtext("state") == "paused"
             else None,
-            "last serialized concurrent command to leave VLC paused",
+            "final serialized pause to leave VLC paused after item startup",
         )
         self.assertEqual(final_status.findtext("state"), "paused")
         self.assertIsNotNone(self.controller.get_playlist())

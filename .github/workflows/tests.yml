@@ -93,8 +93,32 @@ jobs:
       - name: Build integration image with headless VLC
         run: docker build --file Dockerfile.integration --tag ctrlvee:vlc-integration .
 
+      - name: Verify integration image excludes the unused Qt interface
+        run: |
+          docker run --rm --entrypoint sh ctrlvee:vlc-integration -ec '
+            cvlc --version
+            if dpkg-query -s vlc-plugin-qt >/dev/null 2>&1; then
+              echo "Unexpected Qt interface plugin in headless VLC test image"
+              exit 1
+            fi
+          '
+
       - name: Run controller tests against real VLC
         run: docker run --rm ctrlvee:vlc-integration
+
+      - name: Repeat concurrent VLC command test against the same image
+        run: |
+          docker run --rm --entrypoint cvlc ctrlvee:vlc-integration --version
+          for attempt in 1 2 3; do
+            echo "Concurrent command stability run ${attempt}/3"
+            docker run --rm \
+              --env PYTHONPATH=/app:/app/tests \
+              --entrypoint python \
+              ctrlvee:vlc-integration \
+              -m unittest \
+              test_vlc_real_integration.RealVLCIntegrationTests.test_real_vlc_concurrent_commands_use_serialized_controller_path \
+              --verbose
+          done
 
       - name: Repeat real VLC playlist navigation to detect timing flakes
         run: |

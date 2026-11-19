@@ -911,6 +911,66 @@ class VLCControllerTests(unittest.TestCase):
         self.assertEqual(result["expected_item_id"], "new")
         self.assertEqual(result["position"], 2)
 
+    def test_previous_selects_prior_item_without_native_playlist_navigation(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first"/><leaf id="second" current="current"/>'
+            '<leaf id="third"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ), patch.object(
+            self.controller, "get_repeat_state", return_value="none"
+        ), patch.object(self.controller, "play_item", return_value="played") as play, patch.object(
+            self.controller, "send_command"
+        ) as send:
+            result = self.controller.previous()
+
+        self.assertEqual(result, "played")
+        play.assert_called_once_with("first")
+        send.assert_not_called()
+
+    def test_previous_uses_vlc_history_when_shuffle_is_enabled(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first"/><leaf id="second" current="current"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_shuffle_state", return_value=True
+        ), patch.object(
+            self.controller, "send_command", return_value="previous"
+        ) as send:
+            result = self.controller.previous()
+
+        self.assertEqual(result, "previous")
+        send.assert_called_once_with("pl_previous")
+
+    def test_previous_restarts_current_item_at_playlist_start(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first" current="current"/><leaf id="second"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ), patch.object(
+            self.controller, "get_repeat_state", return_value="none"
+        ), patch.object(self.controller, "play_item", return_value="restarted") as play:
+            result = self.controller.previous()
+
+        self.assertEqual(result, "restarted")
+        play.assert_called_once_with("first")
+
+    def test_previous_wraps_to_last_item_when_repeat_playlist_is_enabled(self):
+        playlist = ET.fromstring(
+            '<playlist><leaf id="first" current="current"/><leaf id="second"/></playlist>'
+        )
+        with patch.object(self.controller, "get_playlist", return_value=playlist), patch.object(
+            self.controller, "get_shuffle_state", return_value=False
+        ), patch.object(
+            self.controller, "get_repeat_state", return_value="all"
+        ), patch.object(self.controller, "play_item", return_value="wrapped") as play:
+            result = self.controller.previous()
+
+        self.assertEqual(result, "wrapped")
+        play.assert_called_once_with("second")
+
     def test_previous_and_capture_returns_the_selected_item_identity(self):
         playlist = ET.fromstring('<playlist><leaf id="previous" current="current"/></playlist>')
         with patch.object(self.controller, "previous", return_value=True), patch.object(
