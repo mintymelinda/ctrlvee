@@ -20,6 +20,11 @@ fi
 [ -f "$PROJECT_DIR/.env" ] || fail "Missing $PROJECT_DIR/.env. Create it from .env.example and set VLC_TEST_PASSWORD first."
 [ -d "$PROJECT_DIR/media" ] || fail "Missing media directory: $PROJECT_DIR/media"
 command -v stty >/dev/null 2>&1 || fail "stty is required for hidden token entry."
+command -v id >/dev/null 2>&1 || fail "id is required to map the runner account to NAS media ACLs."
+id ctrlvee-runner >/dev/null 2>&1 || fail "The existing ctrlvee-runner DSM account is required; run the previous account setup first."
+RUNNER_UID=$(id -u ctrlvee-runner)
+RUNNER_GID=$(id -g ctrlvee-runner)
+export RUNNER_UID RUNNER_GID
 
 cd "$PROJECT_DIR"
 # Compose reads .env for interpolation, but the runner service is not given
