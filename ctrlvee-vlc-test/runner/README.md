@@ -2,7 +2,7 @@
 
 The supported runner runs in a Debian 12 (Bookworm) container, not directly on DSM. GitHub Actions now executes JavaScript actions on Node 24, which requires a newer glibc than the one shipped with DSM 7.1.1. Debian 12 supplies the required runtime without replacing or modifying DSM system libraries.
 
-The runner container uses host networking so it can reach the dedicated VLC test service at `127.0.0.1:18080`. It mounts the test media directory read-only at the same absolute host path used by the workflow. It has no Docker socket, no Docker-management permissions, and receives no VLC password.
+The runner container uses the existing DSM runner identity (UID 1058, GID 100 by default) so the Synology ACLs already granted to `ctrlvee-runner` continue to apply to the media mount. The Dockerfile exposes `RUNNER_UID` and `RUNNER_GID` build arguments if that DSM account has different numeric IDs. The runner container uses host networking so it can reach the dedicated VLC test service at `127.0.0.1:18080`. It mounts the test media directory read-only at the same absolute host path used by the workflow. It has no Docker socket, no Docker-management permissions, and receives no VLC password.
 
 ## Prerequisites
 
