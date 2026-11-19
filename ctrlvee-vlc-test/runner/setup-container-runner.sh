@@ -5,7 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 fail() {
-    printf 'ERROR: %s\\n' "$*" >&2
+    printf 'ERROR: %s\n' "$*" >&2
     exit 1
 }
 
@@ -26,10 +26,10 @@ cd "$PROJECT_DIR"
 # the VLC password as an environment variable.
 $COMPOSE build actions-runner
 
-printf '%s\\n' "Generate a short-lived repository runner token in GitHub:"
-printf '%s\\n' "  Settings > Actions > Runners > New self-hosted runner"
-printf '%s\\n' "Paste the token below. It is piped to the configure container over"
-printf '%s\\n' "stdin; it is not placed in shell history or container environment."
+printf '%s\n' "Generate a short-lived repository runner token in GitHub:"
+printf '%s\n' "  Settings > Actions > Runners > New self-hosted runner"
+printf '%s\n' "Paste the token below. It is piped to the configure container over"
+printf '%s\n' "stdin; it is not placed in shell history or container environment."
 printf 'GitHub runner registration token: '
 stty -echo
 if ! IFS= read -r RUNNER_TOKEN; then
@@ -37,15 +37,15 @@ if ! IFS= read -r RUNNER_TOKEN; then
     fail "Could not read the registration token."
 fi
 stty echo
-printf '\\n'
+printf '\n'
 [ -n "$RUNNER_TOKEN" ] || fail "The registration token cannot be empty."
 
-if ! printf '%s\\n' "$RUNNER_TOKEN" | $COMPOSE run --rm -T --no-deps -e RUNNER_MODE=configure actions-runner; then
+if ! printf '%s\n' "$RUNNER_TOKEN" | $COMPOSE run --rm -T --no-deps -e RUNNER_MODE=configure actions-runner; then
     unset RUNNER_TOKEN
     fail "Container runner configuration failed. The existing host runner has not been changed."
 fi
 unset RUNNER_TOKEN
 
 $COMPOSE up -d actions-runner
-printf '\\n%s\\n' "Container runner started. Confirm synology-vlc-lan-container is Idle/online in GitHub."
-printf '%s\\n' "Only after confirming it works, stop the old DSM Task Scheduler runner and remove the old registration in GitHub."
+printf '\n%s\n' "Container runner started. Confirm synology-vlc-lan-container is Idle/online in GitHub."
+printf '%s\n' "Only after confirming it works, stop the old DSM Task Scheduler runner and remove the old registration in GitHub."
