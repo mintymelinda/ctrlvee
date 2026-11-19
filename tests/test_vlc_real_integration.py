@@ -398,7 +398,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
 
     def test_real_vlc_playlist_navigation_and_repeat_modes(self):
         first_id, second_id, third_id = self.load_playlist()
-        self.controller.play_item(first_id)
+        self._run_traced_command("play_item_first", lambda: self.controller.play_item(first_id))
         self.wait_for_playing_item(first_id)
         self.wait_for_playback_progress(first_id)
 
@@ -420,7 +420,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             lambda: self.controller.get_repeat_state() == "all",
             "repeat-playlist mode to enable",
         )
-        self.assertIsNotNone(self.controller.send_command("pl_loop"))
+        self.assertIsNotNone(self._run_traced_command("pl_loop", lambda: self.controller.send_command("pl_loop")))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "none",
             "repeat-playlist mode to disable",
@@ -430,7 +430,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
             lambda: self.controller.get_repeat_state() == "one",
             "repeat-current mode to enable",
         )
-        self.assertIsNotNone(self.controller.send_command("pl_repeat"))
+        self.assertIsNotNone(self._run_traced_command("pl_repeat", lambda: self.controller.send_command("pl_repeat")))
         self.wait_for(
             lambda: self.controller.get_repeat_state() == "none",
             "repeat-current mode to disable",
