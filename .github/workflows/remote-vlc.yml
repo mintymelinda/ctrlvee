@@ -44,4 +44,5 @@ jobs:
           REMOTE_VLC_PORT: "18080"
           REMOTE_VLC_PASSWORD: ${{ secrets.REMOTE_VLC_PASSWORD }}
           REMOTE_VLC_MEDIA_DIR: /volume1/docker/ctrlvee-vlc-test/media
+          PYTHONPATH: ${{ github.workspace }}
         run: python tests/test_vlc_remote_integration.py
