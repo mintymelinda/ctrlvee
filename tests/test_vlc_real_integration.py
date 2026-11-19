@@ -75,7 +75,7 @@ class RealVLCIntegrationTests(unittest.TestCase):
                 "--http-port", str(self.port),
                 "--http-password", self.password,
                 "--no-video",
-                "--aout", "dummy",
+                "--no-audio",
                 "--no-one-instance",
                 "--no-media-library",
                 "--ignore-config",
