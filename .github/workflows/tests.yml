@@ -53,6 +53,9 @@ jobs:
       - name: Build isolated remote VLC test image
         run: docker build --file Dockerfile.vlc-test --tag ctrlvee:vlc-test .
 
+      - name: Build Debian Actions runner image
+        run: docker build --file Dockerfile.actions-runner --tag ctrlvee:actions-runner .
+
       - name: Validate private remote VLC Compose configuration
         env:
           VLC_TEST_PASSWORD: ci-only-test-password
