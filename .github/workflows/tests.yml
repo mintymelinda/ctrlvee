@@ -96,6 +96,19 @@ jobs:
       - name: Run controller tests against real VLC
         run: docker run --rm ctrlvee:vlc-integration
 
+      - name: Repeat real VLC playlist navigation to detect timing flakes
+        run: |
+          for attempt in 1 2 3; do
+            echo "Playlist navigation stability run ${attempt}/3"
+            docker run --rm \
+              --env PYTHONPATH=/app:/app/tests \
+              --entrypoint python \
+              ctrlvee:vlc-integration \
+              -m unittest \
+              test_vlc_real_integration.RealVLCIntegrationTests.test_real_vlc_playlist_navigation_and_repeat_modes \
+              --verbose
+          done
+
       - name: Run optional live Discord test-server checks
         env:
           DISCORD_TEST_BOT_TOKEN: ${{ secrets.DISCORD_TEST_BOT_TOKEN }}

@@ -19,6 +19,17 @@ class RealVLCIntegrationTests(unittest.TestCase):
         if not shutil_which("cvlc"):
             raise unittest.SkipTest("cvlc is not installed; use Dockerfile.integration")
 
+        version = subprocess.run(
+            ["cvlc", "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        cls.vlc_version = next(
+            (line.strip() for line in version.stdout.splitlines() if line.strip()),
+            "unknown",
+        )
         cls.temp_dir = tempfile.TemporaryDirectory(prefix="ctrlvee-vlc-")
         cls.temp_path = Path(cls.temp_dir.name)
         sample_rate = 8000
@@ -130,12 +141,13 @@ class RealVLCIntegrationTests(unittest.TestCase):
             log_file.close()
 
     def vlc_diagnostics(self):
-        """Include server liveness and recent VLC output when HTTP calls fail."""
+        """Include VLC version, server liveness, and recent output on failures."""
         self.log_file.flush()
         self.log_file.seek(0, os.SEEK_END)
         size = self.log_file.tell()
         self.log_file.seek(max(0, size - 16000))
         return (
+            f"VLC version: {self.vlc_version}\\n"
             f"VLC process exit: {self.process.poll()}\\n"
             f"Recent VLC output:\\n{self.log_file.read()}"
         )
@@ -231,6 +243,62 @@ class RealVLCIntegrationTests(unittest.TestCase):
             f"VLC to start playing playlist item {item_id}",
         )
 
+    def wait_for_playback_progress(self, item_id, minimum_seconds=2):
+        """Wait for the selected input to make real playback progress.
+
+        VLC can report the new playlist item as current and even report
+        playing before its input/decoder thread has begun advancing. Do not
+        issue another playlist navigation command during that startup window.
+        """
+        consecutive_samples = 0
+
+        def playback_has_progressed():
+            nonlocal consecutive_samples
+            if self.process.poll() is not None:
+                return None
+
+            status = self.controller.get_status()
+            playlist = self.controller.get_playlist()
+            if status is None or playlist is None:
+                consecutive_samples = 0
+                return None
+
+            current_item = next(
+                (
+                    item for item in playlist.findall(".//leaf")
+                    if item.get("current") and item.get("id") == str(item_id)
+                ),
+                None,
+            )
+            try:
+                playback_time = int(status.findtext("time", "0"))
+            except (TypeError, ValueError):
+                playback_time = 0
+
+            if (
+                current_item is not None
+                and status.findtext("state") == "playing"
+                and status.findtext("currentplid") == str(item_id)
+                and playback_time >= minimum_seconds
+            ):
+                consecutive_samples += 1
+                if consecutive_samples >= 3:
+                    return {
+                        "item_id": str(item_id),
+                        "playback_time": playback_time,
+                        "stable_samples": consecutive_samples,
+                    }
+            else:
+                consecutive_samples = 0
+            return None
+
+        return self.wait_for(
+            playback_has_progressed,
+            f"VLC playback for item {item_id} to advance to "
+            f"{minimum_seconds}s and remain stable",
+            timeout=20,
+        )
+
     def wait_for_current_uri(self, media_uri):
         return self.wait_for(
             lambda: item.get("id")
@@ -248,15 +316,18 @@ class RealVLCIntegrationTests(unittest.TestCase):
         first_id, second_id, third_id = self.load_playlist()
         self.controller.play_item(first_id)
         self.wait_for_playing_item(first_id)
+        self.wait_for_playback_progress(first_id)
 
-        # A playlist's current marker is updated before VLC's input thread is
-        # necessarily ready. Wait for the active input to reach "playing"
-        # before issuing another navigation command; otherwise pl_next can race
-        # input startup in headless VLC and crash the VLC process.
+        # VLC can expose both the new current playlist item and "playing"
+        # before the input thread has started advancing its clock. Require
+        # observable playback progress before issuing another navigation
+        # command; a state-only check leaves a startup race in headless VLC.
         self.controller.next()
         self.wait_for_playing_item(second_id)
+        self.wait_for_playback_progress(second_id)
         self.controller.previous()
         self.wait_for_playing_item(first_id)
+        self.wait_for_playback_progress(first_id)
 
         # VLC exposes repeat-current and repeat-playlist as independent toggles.
         self.assertEqual(self.controller.get_repeat_state(), "none")
