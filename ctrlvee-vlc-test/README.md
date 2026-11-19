@@ -1,47 +1,49 @@
 # CtrlVee VLC test instance
 
-This folder manages the dedicated, headless VLC instance used by the optional LAN integration tests. It is separate from production VLC/Plex. The Compose file uses format 3.7 and is compatible with both legacy `docker-compose` (Compose V1) and `docker compose` (Compose V2). It intentionally omits the top-level `name` property, which Compose V1 rejects.
+This folder manages the dedicated, headless VLC instance used by the optional LAN integration tests. It is separate from production VLC/Plex. The Compose file uses format 3.7 and supports legacy `docker-compose` (Compose V1) and `docker compose` (Compose V2).
 
 ## First-time setup
 
-1. Create the dedicated host media directory:
+1. Create the dedicated host media directory and place at least one supported audio/video file in it:
 
        mkdir -p /volume1/docker/ctrlvee-vlc-test/media
 
-   Give the self-hosted GitHub runner account write access. VLC mounts this directory read-only.
+   The remote integration test reads existing files from this directory. The runner needs read/traverse access only; it does not write, create, rename, or delete media files. The Debian runner container uses the numeric UID/GID of the existing `ctrlvee-runner` DSM account so its existing Synology ACLs apply. Both the runner and VLC mount the media directory read-only.
 
 2. Copy the example environment file and set a unique password:
 
        cp .env.example .env
        chmod 600 .env
 
-   Edit `.env` and replace `VLC_TEST_PASSWORD`. This is the only value stored in `.env`; all other container configuration lives in this Compose file. Keep the actual file private; it is ignored by Git.
+   Edit `.env` and replace `VLC_TEST_PASSWORD`. This password is used by the VLC service and is not passed into the Actions runner container. Keep the actual file private; it is ignored by Git.
 
-3. Validate and start the service:
+3. Validate and start only the VLC service:
 
        docker-compose config --quiet
-       docker-compose up -d --build
+       docker-compose up -d --build vlc-test
+
+Use `docker compose` instead of `docker-compose` if Compose V2 is installed.
 
 The VLC HTTP control interface is published only on `127.0.0.1:18080` on the Synology host. Do not expose this port through QuickConnect, a reverse proxy, Tailscale Funnel, or router port forwarding.
 
-The Compose file uses the fixed host media path `/volume1/docker/ctrlvee-vlc-test/media`. The self-hosted runner must have write access to that same directory.
+The Compose file uses the fixed host media path `/volume1/docker/ctrlvee-vlc-test/media`. The runner container mounts that same path read-only; VLC mounts it at `/media`, also read-only.
 
-## Day-to-day management
+## Day-to-day VLC management
 
 Run these commands from this directory:
 
 | Action | Command |
 | --- | --- |
-| Start | `docker-compose up -d` |
-| Rebuild and start | `docker-compose up -d --build` |
-| Status | `docker-compose ps` |
+| Start | `docker-compose up -d vlc-test` |
+| Rebuild and start | `docker-compose up -d --build vlc-test` |
+| Status | `docker-compose ps vlc-test` |
 | Follow logs | `docker-compose logs -f vlc-test` |
-| Stop | `docker-compose stop` |
-| Start after stopping | `docker-compose start` |
-| Restart | `docker-compose restart` |
+| Stop | `docker-compose stop vlc-test` |
+| Start after stopping | `docker-compose start vlc-test` |
+| Restart | `docker-compose restart vlc-test` |
 | Stop and remove container/network | `docker-compose down` |
 
-`docker-compose down` does not delete the host media directory or the local `.env` file.
+`docker-compose down` does not delete the host media directory or the local `.env` file. The runner uses a separate named volume and is managed independently; see [the runner guide](runner/README.md).
 
 ## Verify the endpoint locally
 
@@ -60,6 +62,6 @@ A successful response is VLC status XML.
 
 Configure repository secret `REMOTE_VLC_PASSWORD` with the same value as `VLC_TEST_PASSWORD`.
 
-The self-hosted runner writes fixtures to `/volume1/docker/ctrlvee-vlc-test/media`; the VLC container reads that directory at `/media`.
+The manually dispatched remote integration test enumerates supported media files already present in `/volume1/docker/ctrlvee-vlc-test/media`, asks VLC to play each one, checks playback controls, and removes only the playlist entries it created. It does not modify media files or pre-existing playlist entries.
 
-Never point this service at production media or a production VLC endpoint. The remote integration test is designed to remove only its own playlist entry; this instance should remain dedicated to testing.
+Never point this service at production media or a production VLC endpoint. This instance should remain dedicated to testing.
