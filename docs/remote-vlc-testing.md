@@ -68,8 +68,10 @@ The script:
 
 The runner registers as `synology-vlc-lan-container` with labels `self-hosted`, `linux`, `x64`, and `vlc-lan`. It uses host networking so the workflow's `127.0.0.1:18080` address reaches the Synology host.
 
+The runner image defaults to UID 1058 and GID 100 to match the dedicated DSM account created by the previous setup. If those numeric IDs differ on your NAS, override the `RUNNER_UID` and `RUNNER_GID` Docker build arguments before building.
+
 The runner container:
-- runs as an unprivileged Linux user after a minimal volume-ownership initialization;
+- runs as an unprivileged Linux user using the existing DSM runner identity (UID 1058, GID 100 by default), preserving the media ACLs granted to `ctrlvee-runner`;
 - has a read-only root filesystem;
 - has no Docker socket, Docker-management permissions, host root mount, or repository checkout mount;
 - mounts the dedicated media directory read-only at its existing absolute path;
