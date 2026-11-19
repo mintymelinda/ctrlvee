@@ -17,7 +17,7 @@ RUN apt-get update \
     && curl --fail --location --silent --show-error --retry 3 \
         "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
         --output /tmp/actions-runner.tar.gz \
-    && printf '%s  %s\\n' "${RUNNER_SHA256}" /tmp/actions-runner.tar.gz | sha256sum --check --status \
+    && printf '%s  %s\n' "${RUNNER_SHA256}" /tmp/actions-runner.tar.gz | sha256sum --check --status \
     && tar -xzf /tmp/actions-runner.tar.gz -C /runner \
     && rm -f /tmp/actions-runner.tar.gz \
     && chown runner:runner /runner
