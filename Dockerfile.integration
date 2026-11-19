@@ -6,7 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends vlc tzdata \
+    # The integration server is headless: install only VLC's CLI and base plugins.
+    # The full vlc package also pulls in the Qt desktop interface, which is not used here.
+    && apt-get install -y --no-install-recommends vlc-bin vlc-plugin-base tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system vlc \
     && useradd --system --gid vlc --create-home --home-dir /home/vlc --shell /usr/sbin/nologin vlc
