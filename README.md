@@ -60,7 +60,7 @@ For NAS library search and direct queueing, mount the media folders into the con
 ### Docker files
 
 - `Dockerfile` builds the Python bot image; VLC itself is not installed in the bot container.
-- `compose.yaml` starts the bot with restart policy, a read-only application filesystem, and persistent state.
+- `docker-compose.yaml` starts the bot with restart policy, a read-only application filesystem, and persistent state.
 - `.dockerignore` keeps local environments, credentials, and data out of the image.
 
 ### Private Synology remote-VLC integration environment
