@@ -15,7 +15,7 @@ services:
       # Keep the VLC control API local to the Synology host.
       - "127.0.0.1:18080:8080"
     volumes:
-      # Fixed, dedicated host directory shared with the self-hosted runner.
+      # VLC reads the dedicated fixtures; it never modifies their bytes.
       - /volume1/docker/ctrlvee-vlc-test/media:/media:ro
     read_only: true
     tmpfs:
@@ -24,3 +24,33 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  actions-runner:
+    build:
+      context: ..
+      dockerfile: Dockerfile.actions-runner
+    image: ctrlvee-actions-runner:local
+    container_name: ctrlvee-actions-runner
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      RUNNER_MODE: run
+    volumes:
+      - actions-runner-data:/runner
+      # Preserve the host path because the workflow checks this exact path.
+      - /volume1/docker/ctrlvee-vlc-test/media:/volume1/docker/ctrlvee-vlc-test/media:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # Entrypoint fixes named-volume ownership, then drops privileges.
+      - CHOWN
+
+volumes:
+  actions-runner-data:
+    name: ctrlvee-actions-runner-data

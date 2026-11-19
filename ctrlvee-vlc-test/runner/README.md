@@ -1,57 +1,69 @@
-# Synology remote VLC runner
+# Synology remote VLC Actions runner
 
-This directory installs the **official GitHub Actions self-hosted runner** directly on a Synology DSM x86_64 host. It is deliberately not a Docker container: the runner can reach the test VLC endpoint at `127.0.0.1:18080` and read the fixture directory using the host filesystem.
+The supported runner runs in a Debian 12 (Bookworm) container, not directly on DSM. GitHub Actions now executes JavaScript actions on Node 24, which requires a newer glibc than the one shipped with DSM 7.1.1. Debian 12 supplies the required runtime without replacing or modifying DSM system libraries.
 
-## Install
+The runner container uses host networking so it can reach the dedicated VLC test service at `127.0.0.1:18080`. It mounts the test media directory read-only at the same absolute host path used by the workflow. It has no Docker socket, no Docker-management permissions, and receives no VLC password.
 
-1. In GitHub, open **Settings → Actions → Runners → New self-hosted runner**, select **Linux / x64**, and generate a short-lived registration token.
-2. From the repository checkout on the NAS, run the setup script as root:
+## Prerequisites
 
-   ```sh
-   sudo sh ctrlvee-vlc-test/runner/setup-runner.sh
-   ```
-
-3. The setup script creates the dedicated DSM account `ctrlvee-runner` if it does not already exist. It generates an unguessable random password that is never displayed or saved, gives the account no DSM application privileges, and refuses to use an account in the `administrators` group.
-4. It removes stale per-user ACL entries left by earlier setup attempts, restores traversal-only access on each parent directory, grants read/traverse access to the runner scripts, and grants read-only access to actual media directories and files. It deliberately does not add DENY entries to parent directories: Synology can propagate those entries into child media folders and block fixture access. The runner's ability to list parent-directory names therefore follows the NAS's existing ACLs; this setup does not promise to hide those names. It verifies that the runner can read fixtures but cannot write media directories or files, read the local VLC `.env` file, or access the Docker socket when present. Synology `@eaDir`, recycle-bin, snapshot, and temporary metadata trees are excluded from fixture permissions and checks.
-5. The installer prompts for the short-lived registration token **as the unprivileged runner account**. The token is not written to disk or shell history. It then downloads the official GitHub Actions runner v2.338.2 and verifies its pinned SHA-256 checksum. If DSM does not provide `ldd`, the installer creates a private `actions-runner/.local-tools/ldd` compatibility helper backed by DSM's glibc dynamic loader. If DSM also lacks `ldconfig`, it creates a private, read-only `actions-runner/.local-tools/ldconfig` helper that reports ICU shared libraries found in standard loader directories and any `LD_LIBRARY_PATH` directories. Both helpers are added to `PATH` for runner configuration. They do not modify system libraries or the loader cache and do not install missing libraries.
-6. Start the runner:
-
-   ```sh
-   sudo -u ctrlvee-runner /bin/sh ctrlvee-vlc-test/runner/run-runner.sh
-   ```
-
-The runner receives GitHub's default `self-hosted`, `linux`, and `x64` labels in addition to `vlc-lan`. It has no Docker socket, no Docker-management privileges, and no access to the local VLC password file.
-
-The setup is safe to rerun: it reuses the dedicated account, removes only that account's explicit ACL entries before rebuilding the required permissions, and does not register a second GitHub runner if one is already configured.
-
-## Start at boot
-
-In DSM **Control Panel → Task Scheduler**:
-
-1. Create **Triggered Task → User-defined script**.
-2. Set the user to `ctrlvee-runner`.
-3. Trigger on **Boot-up**.
-4. Set the user-defined script to the absolute path of the repository's `ctrlvee-vlc-test/runner/run-runner.sh`, for example:
-
-   ```sh
-   /bin/sh /volume1/docker/ctrlvee/ctrlvee-vlc-test/runner/run-runner.sh
-   ```
-
-5. Save and run the task once to verify it starts.
-
-Keep the runner process running in the foreground under Task Scheduler. Do not configure a second copy of the same runner.
-
-## Requirements and security
-
-- Synology DSM on x86_64 with its glibc dynamic loader (the workflow also requires the `x64` label). System `ldd` and `ldconfig` commands are optional; the installer supplies runner-local compatibility helpers when needed. The host must still provide the glibc dynamic loader and an ICU shared library (`libicu*.so`) discoverable in standard loader directories or `LD_LIBRARY_PATH`.
-- Run the setup script through `sudo` from an interactive SSH terminal.
+- Synology DSM x86_64 with Container Manager / Docker Engine.
+- Docker Compose V2 (`docker compose`) or legacy Compose V1 (`docker-compose`).
+- The dedicated VLC test service deployed from `ctrlvee-vlc-test/docker-compose.yml`.
+- `ctrlvee-vlc-test/.env` created from `.env.example`, containing only `VLC_TEST_PASSWORD`.
+- `ctrlvee-vlc-test/media/` exists and contains at least one supported media file.
 - Outbound HTTPS access to GitHub.
-- DSM `synouser` and `synoacltool`, plus `openssl`, `curl`, `tar`, `sha256sum`, `find`, and `su`.
-- The runner account can read/traverse `/volume1/docker/ctrlvee-vlc-test/media`, but cannot write to it.
-- The local `ctrlvee-vlc-test/.env` file must not be readable by the runner account.
-- The dedicated test VLC container remains bound to host loopback at `127.0.0.1:18080`.
-- Restrict write access to the repository's `main` branch. This runner must only execute the manually dispatched trusted-main workflow, never pull-request or fork code.
 
-Runner files and credentials are stored under `actions-runner/`, which is ignored by Git. Never commit that directory, registration tokens, or runner credentials.
+## Configure and start the container runner
 
-To remove the runner, stop its DSM task and process, then use GitHub **Settings → Actions → Runners** to remove the offline runner entry. After that, remove the local `actions-runner/` directory and, if no longer needed, delete the `ctrlvee-runner` DSM account through DSM.
+From an interactive SSH session:
+
+```sh
+cd /volume1/docker/ctrlvee
+sh ctrlvee-vlc-test/runner/setup-container-runner.sh
+```
+
+The script builds the Debian runner image, prompts for a short-lived GitHub repository runner registration token without echoing it, pipes the token to the one-shot configuration container over stdin, and starts the persistent runner service. The token is not stored in a file or container environment.
+
+The persistent runner configuration and work directory live in a Docker named volume, `ctrlvee-actions-runner-data`. The container is named `ctrlvee-actions-runner` and registers as `synology-vlc-lan-container` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels.
+
+Verify the new runner is online and Idle under GitHub **Settings → Actions → Runners** before removing the old native runner.
+
+## Migrate from the previous native DSM runner
+
+The previous host-installed runner cannot execute Node 24 on DSM 7.1.1. The container setup intentionally registers a second runner so the existing working registration is left untouched during migration.
+
+After the new `synology-vlc-lan-container` runner is online:
+
+1. Stop the old `ctrlvee-runner` process and disable its DSM boot task.
+2. In GitHub **Settings → Actions → Runners**, remove the old offline `synology-vlc-lan` runner.
+3. The old DSM account and files can then be removed manually if you no longer need them. This setup does not change DSM users, ACLs, or existing runner files.
+
+Do not remove the old runner until the container runner is confirmed online.
+
+## Day-to-day management
+
+Run from `/volume1/docker/ctrlvee/ctrlvee-vlc-test`:
+
+| Action | Command |
+| --- | --- |
+| Status | `docker compose ps actions-runner` |
+| Logs | `docker compose logs -f actions-runner` |
+| Restart | `docker compose restart actions-runner` |
+| Stop | `docker compose stop actions-runner` |
+| Start | `docker compose up -d actions-runner` |
+| Update image | `docker compose build --pull actions-runner && docker compose up -d actions-runner` |
+
+Use `docker-compose` instead of `docker compose` if the NAS only has Compose V1.
+
+To remove the container runner, stop the service, remove the GitHub runner registration from GitHub Settings, then remove the named volume `ctrlvee-actions-runner-data` only if you intentionally want to delete its configuration and job workspace. Do not remove the volume as part of a routine image rebuild.
+
+## Isolation and network model
+
+- The runner uses Docker host networking to access the VLC HTTP API on host loopback. This is required because a container bridge's `127.0.0.1` would refer to that container, not the NAS.
+- The runner sees `/volume1/docker/ctrlvee-vlc-test/media` read-only at the same path expected by the workflow. The VLC container separately mounts the same host directory read-only at `/media`.
+- The runner has a persistent named volume for its own installation, credentials, and job workspace.
+- The runner container does not mount `/var/run/docker.sock`, the repository checkout, the host root filesystem, or the VLC `.env` file.
+- The Compose service does not pass `VLC_TEST_PASSWORD` into the runner container. The GitHub workflow receives it only as the `REMOTE_VLC_PASSWORD` secret for the integration test process.
+- The remote VLC HTTP endpoint remains bound to `127.0.0.1:18080`. Do not expose it through a reverse proxy, router port forwarding, or public tunnel.
+
+The runner is a trusted repository-level execution environment. Keep write access to `main` restricted and do not target it from pull-request or fork workflows.

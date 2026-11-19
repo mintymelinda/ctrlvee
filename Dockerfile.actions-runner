@@ -1,0 +1,30 @@
+FROM debian:bookworm-slim
+
+ARG RUNNER_VERSION=2.338.2
+ARG RUNNER_SHA256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/tmp \
+    RUNNER_HOME=/runner
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git gosu jq libcurl4 libicu72 libkrb5-3 \
+        libssl3 libstdc++6 libunwind8 libuuid1 zlib1g \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home --home-dir /home/runner --shell /usr/sbin/nologin runner \
+    && mkdir -p /runner \
+    && curl --fail --location --silent --show-error --retry 3 \
+        "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+        --output /tmp/actions-runner.tar.gz \
+    && printf '%s  %s\\n' "${RUNNER_SHA256}" /tmp/actions-runner.tar.gz | sha256sum --check --status \
+    && tar -xzf /tmp/actions-runner.tar.gz -C /runner \
+    && rm -f /tmp/actions-runner.tar.gz \
+    && chown runner:runner /runner
+
+COPY ctrlvee-vlc-test/runner/container-entrypoint.sh /usr/local/bin/ctrlvee-runner-entrypoint
+RUN chmod 0755 /usr/local/bin/ctrlvee-runner-entrypoint
+
+WORKDIR /runner
+VOLUME ["/runner"]
+ENTRYPOINT ["/usr/local/bin/ctrlvee-runner-entrypoint"]

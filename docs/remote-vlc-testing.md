@@ -1,48 +1,47 @@
 # Private Synology VLC integration environment
 
-This deployment adds a **dedicated test VLC instance** and a **repository-scoped GitHub Actions runner** on the Synology. It must not point at the production Plex/VLC endpoint. The Compose file uses format 3.7 and supports both legacy `docker-compose` (Compose V1) and `docker compose` (Compose V2); the top-level `name` property is deliberately omitted because Compose V1 rejects it.
+This opt-in deployment runs a dedicated VLC test service and a repository-scoped GitHub Actions runner on the Synology. The runner runs inside Debian 12 rather than on DSM itself: current GitHub Actions JavaScript actions use Node 24, whose glibc requirements are newer than DSM 7.1.1 provides. The container supplies a compatible userspace without changing DSM system libraries.
 
-The VLC HTTP interface is published only on the Synology loopback address (127.0.0.1:18080). The native runner reaches it locally. Do not add a reverse-proxy route, router port-forward, or public DNS record for this port.
+The VLC HTTP interface is published only on the Synology loopback address (127.0.0.1:18080). The runner uses host networking to reach it. Do not add a reverse-proxy route, router port-forward, or public DNS record for this port.
 
 ## 1. Confirm the Synology architecture
 
-Connect to DSM over SSH from your LAN or through your private remote-access method, then run:
+Connect to DSM over SSH and run:
 
     uname -m
 
-This first-run guide assumes x86_64. If it reports aarch64 or another architecture, stop before downloading the runner and adjust the workflow runner label and runner package to match.
+This deployment targets x86_64. If the result is different, stop and adjust the runner image and workflow labels before proceeding.
 
-Do not expose SSH to the public internet. QuickConnect can remain enabled for DSM. Tailscale is recommended for private SSH/admin access while away from home; it does not need any inbound router ports.
+## 2. Prepare the isolated media directory
 
-## 2. Create the isolated test media directory
-
-Create the fixed host directory used by both Compose and the runner:
+Create the dedicated host directory:
 
     mkdir -p /volume1/docker/ctrlvee-vlc-test/media
 
-Place one or more representative audio/video files in this directory (subdirectories are supported). The integration test discovers all supported files automatically. The runner account needs read/traverse access; it does not need write access. Files and directories must also be readable/traversable by the VLC container's unprivileged UID 10001. The VLC container mounts this directory read-only.
+Place one or more representative audio/video files in it. The remote integration test discovers supported files and plays them through VLC. The test does not create, edit, rename, or delete media files; it only adds and removes its own VLC playlist entries.
 
 Do not point this directory at the production media library.
 
-## 3. Deploy the test VLC container
+## 3. Deploy the dedicated VLC test service
 
-Clone the repository to a stable Synology path, for example /volume1/docker/ctrlvee, and check out the reviewed main branch. The self-contained Compose deployment is in ctrlvee-vlc-test/. The Compose file contains the image, ports, media mount, and hardening configuration. Only the VLC password is supplied through the local, uncommitted .env file:
+Clone the repository to a stable Synology path, for example `/volume1/docker/ctrlvee`, and check out the reviewed `main` branch. From the repository:
 
     cd /volume1/docker/ctrlvee/ctrlvee-vlc-test
     cp .env.example .env
     # Edit .env and set a unique VLC_TEST_PASSWORD.
     chmod 600 .env
     docker-compose config --quiet
-    docker-compose up -d --build
+    docker-compose up -d --build vlc-test
 
-The container:
+Use `docker compose` instead of `docker-compose` if Compose V2 is installed.
+
+The VLC container:
 - runs VLC as an unprivileged user;
 - has a read-only root filesystem and drops Linux capabilities;
-- mounts only /volume1/docker/ctrlvee-vlc-test/media at /media, read-only;
-- has its HTTP interface bound to container port 8080;
-- publishes that port only as 127.0.0.1:18080 on the Synology host.
+- mounts only `/volume1/docker/ctrlvee-vlc-test/media` at `/media`, read-only;
+- publishes its HTTP interface only as `127.0.0.1:18080` on the Synology host.
 
-Check it locally on the Synology (the source command loads VLC_TEST_PASSWORD from the local .env into your shell):
+Verify it locally:
 
     set -a
     . ./.env
@@ -51,56 +50,66 @@ Check it locally on the Synology (the source command loads VLC_TEST_PASSWORD fro
       --user ":$VLC_TEST_PASSWORD" \
       http://127.0.0.1:18080/requests/status.xml
 
-The response should be VLC status XML. Do not test by opening port 18080 from the internet; it is intentionally loopback-only.
+The response should be VLC status XML.
 
-## 4. Install the self-hosted runner on the Synology
+## 4. Build, configure, and start the Debian Actions runner
 
-The repository includes an account bootstrapper, runner installer, and startup script under `ctrlvee-vlc-test/runner/`. From the repository checkout, run this from an interactive SSH session:
+From the repository root, run:
 
-    sudo sh ctrlvee-vlc-test/runner/setup-runner.sh
+    cd /volume1/docker/ctrlvee
+    sh ctrlvee-vlc-test/runner/setup-container-runner.sh
 
-The bootstrapper uses DSM's `synouser` to create the dedicated non-administrator account `ctrlvee-runner` with a generated, unguessable password that is never displayed or saved. It uses `synoacltool` to remove stale explicit ACL entries for that account, restore traversal-only access on each parent directory, grant read/traverse access to the runner scripts, and grant read-only access to actual media directories and files. It deliberately avoids DENY entries on parent directories because Synology ACL inheritance can carry those entries into the media subtree and block fixture access. The runner's ability to list parent-directory names therefore follows the NAS's existing ACLs; the setup does not claim to hide those names. It checks that the runner can read fixtures but cannot write media directories or files, read the local VLC `.env` password file, or access the Docker socket when present. Synology `@eaDir`, recycle-bin, snapshot, and temporary metadata trees are excluded from fixture permissions and checks. It then drops privileges and runs the installer as `ctrlvee-runner`.
+The script:
+1. Builds the official GitHub Actions runner v2.338.2 into a Debian 12 image and verifies its pinned SHA-256 checksum.
+2. Prompts for a short-lived repository registration token without echoing it.
+3. Pipes the token to a one-shot configuration container over stdin (not a command-line argument or environment variable).
+4. Stores the runner installation, credentials, and work directory in the persistent Docker volume `ctrlvee-actions-runner-data`.
+5. Starts the runner container.
 
-Before installation, you can run the read-only dependency report as the dedicated account:\n\n    sudo -u ctrlvee-runner -H sh ctrlvee-vlc-test/runner/diagnose-runner.sh\n\nIt checks the DSM host/account, required commands, libc, runner files and permissions, shared-library resolution for the runner and bundled Node runtimes (when `ldd` is available), GitHub HTTPS connectivity, and access to protected local files. It makes no system changes and does not print environment variables or credentials. Resolve every `[FAIL]` before continuing.\n\nThe installer downloads the official GitHub Actions runner v2.338.2 release for Linux x64, verifies its pinned SHA-256 checksum, and prompts for the short-lived registration token. It requires `ldd` before prompting for the token because the official runner configuration script uses it. It configures the runner as `synology-vlc-lan` with the additional `vlc-lan` label. GitHub supplies the standard `self-hosted`, `linux`, and `x64` labels automatically. The token is not saved.
+The runner registers as `synology-vlc-lan-container` with labels `self-hosted`, `linux`, `x64`, and `vlc-lan`. It uses host networking so the workflow's `127.0.0.1:18080` address reaches the Synology host.
 
-For persistence across DSM restarts, create a DSM **Task Scheduler → Triggered Task → User-defined script** task running as `ctrlvee-runner`, triggered at boot, with the absolute path to `ctrlvee-vlc-test/runner/run-runner.sh`. Keep the runner in the foreground, ensure only one runner process is started, and do not expose the runner listener or install it on a public-facing host.
+The runner container:
+- runs as an unprivileged Linux user after a minimal volume-ownership initialization;
+- has a read-only root filesystem;
+- has no Docker socket, Docker-management permissions, host root mount, or repository checkout mount;
+- mounts the dedicated media directory read-only at its existing absolute path;
+- does not receive `VLC_TEST_PASSWORD` or read the local `.env` file.
 
-The runner is installed under `ctrlvee-vlc-test/runner/actions-runner/`, which is ignored by Git. It does not mount or access the Docker socket.
+The Compose project reads `.env` for interpolation of the VLC service, but the password is not included in the runner service's environment.
 
-The runner is persistent and can execute repository code from the trusted main branch. Keep write access to main restricted and do not add this runner to pull-request workflows or workflows that execute fork/untrusted code.
+## 5. Migrate away from the old native DSM runner
 
-## 5. Configure GitHub Actions
+If the old native `synology-vlc-lan` runner is still registered, leave it alone until the new container runner is shown as **Idle/online** in GitHub **Settings → Actions → Runners**.
 
-Add repository secret **REMOTE_VLC_PASSWORD** with the same value as the local **VLC_TEST_PASSWORD**. No GitHub repository variable is needed for the media path: the runner and Compose deployment both use the fixed directory /volume1/docker/ctrlvee-vlc-test/media.
+After the container runner is confirmed online:
+1. Stop the old `ctrlvee-runner` process.
+2. Disable its DSM Task Scheduler boot task.
+3. Remove the old `synology-vlc-lan` registration in GitHub Settings → Actions → Runners.
+4. Optionally remove the old DSM account and old `actions-runner/` files yourself after confirming you no longer need them.
 
-The workflow assumes:
-- runner labels self-hosted, linux, x64, and vlc-lan;
-- test VLC at 127.0.0.1:18080;
-- the runner can read /volume1/docker/ctrlvee-vlc-test/media, which the container mounts at /media.
+The setup script does not modify DSM accounts, ACLs, scheduled tasks, or the old runner registration.
 
-## 6. Run the remote integration test
+## 6. Configure GitHub Actions
 
-After the runner is online and media files are present, go to **Actions → Remote VLC integration → Run workflow** and dispatch it from main.
+Add repository secret `REMOTE_VLC_PASSWORD` with the same value as the local `VLC_TEST_PASSWORD`. The manually dispatched workflow targets `self-hosted`, `linux`, `x64`, and `vlc-lan`, and explicitly checks out trusted `main`.
 
-The workflow is manually dispatched only, explicitly checks out main, and targets only the vlc-lan runner label. It does not run for pull requests, pushes, or fork code.
+Keep write access to `main` restricted. Do not add this runner to pull-request or fork workflows.
 
-The remote test:
-1. verifies status and playlist access;
-2. discovers all supported audio/video files in the dedicated media directory (including subdirectories);
-3. asks VLC to enqueue and play each selected file;
-4. verifies pause, resume, and stop for every selected file, and seek when the file is at least 35 seconds long;
-5. removes only the playlist items created by that test.
+## 7. Run and manage the remote integration test
 
-It never writes to, renames, or deletes the media files. It never clears the playlist or removes pre-existing playlist entries. Keep this VLC instance dedicated to CtrlVee integration tests; do not use it for normal playback.
+Open **Actions → Remote VLC integration → Run workflow** and dispatch it from `main`.
 
-## 7. Remote administration
+The workflow verifies the VLC endpoint and media directory, installs Python test dependencies, then tests real playback, pause, resume, seek (for files at least 35 seconds long), and stop for every supported media file it discovers. It removes only playlist entries created by the test. It never clears the playlist or changes media file bytes.
 
-Keep QuickConnect and existing reverse-proxy services as they are. For private administration from outside the home, install Tailscale on the Synology using the official Synology package/instructions and on the administrator's device. Use the Tailscale address for SSH/DSM administration if desired. Do not publish VLC's HTTP port through Tailscale Funnel, a reverse proxy, or router port forwarding.
+Manage the runner from `ctrlvee-vlc-test`:
 
-## Troubleshooting
+| Action | Command |
+| --- | --- |
+| Status | `docker-compose ps actions-runner` |
+| Logs | `docker-compose logs -f actions-runner` |
+| Restart | `docker-compose restart actions-runner` |
+| Stop | `docker-compose stop actions-runner` |
+| Start | `docker-compose up -d actions-runner` |
+| Rebuild | `docker-compose build --pull actions-runner && docker-compose up -d actions-runner` |
 
-- Runner offline: check the DSM boot task, runner process, outbound DNS/HTTPS, and GitHub runner status.
-- VLC status unavailable: check docker-compose logs vlc-test, the container status, and the local curl command.
-- Authentication failure: ensure REMOTE_VLC_PASSWORD and local VLC_TEST_PASSWORD match.
-- No media fixtures found: confirm the directory contains at least one non-empty supported media file and that the runner account can read it.
-- Workflow says no runner: confirm all four labels, especially vlc-lan, and that the runner is online.
+The runner configuration persists in `ctrlvee-actions-runner-data`. Do not delete this volume for routine image updates. To retire the runner, stop it, remove its GitHub registration, then remove the volume only if you intend to delete its runner credentials and job workspace.

@@ -53,6 +53,9 @@ jobs:
       - name: Build isolated remote VLC test image
         run: docker build --file Dockerfile.vlc-test --tag ctrlvee:vlc-test .
 
+      - name: Build Debian Actions runner image
+        run: docker build --file Dockerfile.actions-runner --tag ctrlvee:actions-runner .
+
       - name: Validate private remote VLC Compose configuration
         env:
           VLC_TEST_PASSWORD: ci-only-test-password
@@ -79,32 +82,3 @@ jobs:
           from src.cogs.watch import WatchCommands
           print(f'CtrlVee runtime imports OK (discord.py {discord.__version__})')
           "
-
-  real-vlc-integration:
-    name: Real VLC integration tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Build integration image with headless VLC
-        run: docker build --file Dockerfile.integration --tag ctrlvee:vlc-integration .
-
-      - name: Run controller tests against real VLC
-        run: docker run --rm ctrlvee:vlc-integration
-
-      - name: Run optional live Discord test-server checks
-        env:
-          DISCORD_TEST_BOT_TOKEN: ${{ secrets.DISCORD_TEST_BOT_TOKEN }}
-          DISCORD_TEST_GUILD_ID: ${{ secrets.DISCORD_TEST_GUILD_ID }}
-          DISCORD_TEST_TEXT_CHANNEL_ID: ${{ secrets.DISCORD_TEST_TEXT_CHANNEL_ID }}
-          DISCORD_TEST_VOICE_CHANNEL_ID: ${{ secrets.DISCORD_TEST_VOICE_CHANNEL_ID }}
-        run: |
-          docker run --rm \
-            -e DISCORD_TEST_BOT_TOKEN \
-            -e DISCORD_TEST_GUILD_ID \
-            -e DISCORD_TEST_TEXT_CHANNEL_ID \
-            -e DISCORD_TEST_VOICE_CHANNEL_ID \
-            --entrypoint python \
-            ctrlvee:vlc-integration \
-            tests/test_discord_live_integration.py
