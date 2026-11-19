@@ -190,23 +190,28 @@ class RealVLCIntegrationTests(unittest.TestCase):
         try:
             result = await self.controller.run_async(method_name, *args)
             event["result_type"] = type(result).__name__
+            event["command_finished_at"] = time.monotonic()
             return result
         except Exception as error:
             event["error"] = f"{type(error).__name__}: {error}"
             raise
         finally:
-            event["duration_seconds"] = round(time.monotonic() - started_at, 4)
-            event["after"] = self._vlc_state_snapshot()
-            event["finished_at"] = time.monotonic()
+            event.setdefault("command_finished_at", time.monotonic())
+            event["duration_seconds"] = round(event["command_finished_at"] - started_at, 4)
+            event["observed_after"] = self._vlc_state_snapshot()
+            event["recorded_at"] = time.monotonic()
             self.command_trace.append(event)
 
     def assert_async_commands_completed_in_submission_order(self, expected):
         """Check the async lock's observable completion order."""
-        actual = [event["command"] for event in self.command_trace]
-        self.assertEqual(actual, expected, f"Unexpected command completion order: {self.command_trace!r}")
-        self.assertTrue(
-            all(event["finished_at"] >= event["started_at"] for event in self.command_trace),
-            f"Invalid command timing data: {self.command_trace!r}",
+        ordered = sorted(self.command_trace, key=lambda event: event["started_at"])
+        actual = [event["command"] for event in ordered]
+        self.assertEqual(actual, expected, f"Unexpected command submission order: {self.command_trace!r}")
+        completion_times = [event["command_finished_at"] for event in ordered]
+        self.assertEqual(
+            completion_times,
+            sorted(completion_times),
+            f"Serialized commands completed out of submission order: {self.command_trace!r}",
         )
 
     def wait_for(self, predicate, description, timeout=12):
