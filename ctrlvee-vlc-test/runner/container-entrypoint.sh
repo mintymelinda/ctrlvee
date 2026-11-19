@@ -2,8 +2,8 @@
 set -euo pipefail
 
 if [[ "$(id -u)" -eq 0 ]]; then
-    chown runner:runner /runner
-    exec gosu runner:runner "$0" "$@"
+    chown runner:100 /runner
+    exec gosu runner:100 "$0" "$@"
 fi
 
 cd /runner
