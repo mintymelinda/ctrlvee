@@ -151,9 +151,28 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
                 f"VLC to resume {fixture_name!r}",
             )
 
-            duration = int(status.findtext("length") or "0")
+            # VLC can report length=-1 immediately after playback starts. Give
+            # its demuxer time to discover the duration before deciding to skip.
+            self.seek_coverage[fixture_name] = "duration unavailable"
+            try:
+                status = self.wait_until(
+                    lambda: known_status
+                    if (known_status := self.controller.get_status()) is not None
+                    and known_status.findtext("currentplid") == str(owned_item_id)
+                    and known_status.findtext("state") == "playing"
+                    and (known_duration := int(known_status.findtext("length") or "-1")) >= 0
+                    else None,
+                    f"VLC to report the duration of {fixture_name!r}",
+                    timeout=10,
+                )
+                duration = int(status.findtext("length") or "-1")
+            except AssertionError:
+                status = self.controller.get_status()
+                duration = -1
+
             if duration >= 35:
                 seek_seconds = min(30, duration - 5)
+                self.seek_coverage[fixture_name] = "seek attempted"
                 self.controller.seek(seek_seconds)
                 self.wait_until(
                     lambda: status
@@ -163,11 +182,12 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
                     else None,
                     f"VLC to seek within {fixture_name!r}",
                 )
+                self.seek_coverage[fixture_name] = "seek passed"
+            elif duration >= 0:
+                self.seek_coverage[fixture_name] = f"skipped: short ({duration}s)"
             else:
-                print(
-                    f"Skipping seek for {fixture_name}: "
-                    f"media duration is only {duration}s"
-                )
+                self.seek_coverage[fixture_name] = "skipped: duration unavailable"
+
 
             self.controller.stop()
             self.wait_until(
@@ -210,13 +230,37 @@ class RemoteVLCIntegrationTests(unittest.TestCase):
             ),
         )
 
+        self.seek_coverage = {}
         print(
             f"Testing {len(fixtures)} media fixture(s): "
             + ", ".join(path.relative_to(self.media_dir).as_posix() for path in fixtures)
         )
-        for fixture_path in fixtures:
-            with self.subTest(media=fixture_path.relative_to(self.media_dir).as_posix()):
-                self.exercise_media_file(fixture_path)
+        try:
+            for fixture_path in fixtures:
+                fixture_name = fixture_path.relative_to(self.media_dir).as_posix()
+                with self.subTest(media=fixture_name):
+                    self.exercise_media_file(fixture_path)
+        finally:
+            passed = [
+                name for name, result in self.seek_coverage.items()
+                if result == "seek passed"
+            ]
+            attempted = [
+                name for name, result in self.seek_coverage.items()
+                if result in {"seek passed", "seek attempted"}
+            ]
+            skipped = {
+                name: result for name, result in self.seek_coverage.items()
+                if result.startswith("skipped:")
+            }
+            print(
+                "VLC SEEK COVERAGE: "
+                f"{len(passed)}/{len(fixtures)} passed; "
+                f"{len(attempted)}/{len(fixtures)} attempted; "
+                f"{len(skipped)} skipped"
+            )
+            for name, result in self.seek_coverage.items():
+                print(f"  SEEK {result}: {name}")
 
 
 if __name__ == "__main__":
